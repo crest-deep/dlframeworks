@@ -1,0 +1,5 @@
+#!/bin/bash
+
+python generator.py
+
+qsub -g tgc-ebdcrest ./train.sh
