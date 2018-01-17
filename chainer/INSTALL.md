@@ -6,7 +6,7 @@ To install ChainerMN, you need
 - MPI4Py
 - Chainer
 
-Following document describes a simple route to install these modules
+This document describes a simple route to install these modules
 **from source**, if you prefer using `pip` to download and install a stable
 release, check the offical documentation.
 
