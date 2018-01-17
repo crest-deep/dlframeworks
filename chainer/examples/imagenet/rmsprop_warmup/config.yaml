@@ -15,7 +15,7 @@ node: 2
 
 # -------- Wall time --------
 #   * (hh:mm:ss)
-time: 00:20:00
+time: 00:05:00
 
 
 # -------- Model architecture --------
@@ -24,7 +24,7 @@ time: 00:20:00
 #   * googlenetbn
 #   * nin
 #   * resnet50
-arch: googlenetbn
+arch: resnet50
 
 
 # -------- Path to init model directory --------
@@ -41,15 +41,10 @@ epoch: 4
 batchsize: 64
 
 
-# -------- Path to working directory --------
-working_dir: $HOME/dlframeworks/chainer/examples/imagenet
-
-
 # -------- Path to dataset directory --------
 #   * /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
 dataset_dir: /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
 
 
 # -------- Path to results --------
-#   * /gs/hs0/tgb-crest-deep/17M30275/results
-out: $HOME/dlframeworks/chainer/examples/imagenet/results
+out: ./results

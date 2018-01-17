@@ -13,7 +13,7 @@ jobscript = """\
 
 results_dir={out}/$JOB_ID
 
-source {working_dir}/modules.sh  # Load modules, set Python
+source ../modules.sh  # Load modules, set Python
 mkdir -p ${{results_dir}}
 
 module list
