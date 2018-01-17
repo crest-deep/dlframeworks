@@ -12,7 +12,7 @@ To install TensorFlow **from source**, you need
 ### Download and unpack
 
 Download and unpack Bazel's distribution archive from
-[release page](https://github.com/bazelbuild/bazel/releases).
+[the release page](https://github.com/bazelbuild/bazel/releases).
 
 We will use version **0.9.0**.
 
@@ -37,11 +37,13 @@ Put the file under `$HOME/.local/bazel/0.9.0/bin` and add to the `PATH`.
 - Commit de4b6bb
 
 You might not be able to build TensorFlow in the login node.
-It is recommended to configure, build, and install TensorFlow at compute node.
+It is recommended to configure, build, and install TensorFlow at the compute
+node.
 
-TensorFlow requires to add `/apps/t3/sles12sp2/cuda/8.0.61/lib64/stubs` to the
-`LD_LIBRARY_PATH` and `LIBRARY_PATH` before building.
-TensorFlow requires to CUPTI libraries and headers.
+TensorFlow requires libraries in `/apps/t3/sles12sp2/cuda/8.0.61/lib64/stubs`.
+and CUPTI libraries and headers.
+Add those paths to `LD_LIBRARY_PATH`, `LIBRARY_PATH`, and `CPATH` correctly.
+
 
 Install Python packages.
 
