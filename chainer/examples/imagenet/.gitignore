@@ -1,0 +1,3 @@
+*.log
+train.sh
+results/

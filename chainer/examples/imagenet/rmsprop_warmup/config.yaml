@@ -1,0 +1,50 @@
+# -------- Resource type name --------
+#   * f_node
+#   * h_node
+#   * q_node
+#   * s_core
+#   * q_core
+#   * s_gpu
+resource: q_node
+
+
+# -------- Number of nodes --------
+#   * (int)
+node: 2
+
+
+# -------- Wall time --------
+#   * (hh:mm:ss)
+time: 00:05:00
+
+
+# -------- Model architecture --------
+#   * alex
+#   * googlenet
+#   * googlenetbn
+#   * nin
+#   * resnet50
+arch: resnet50
+
+
+# -------- Path to init model directory --------
+initmodels: /gs/hs0/tgb-crest-deep/17M30275/datasets/init_models
+
+
+# -------- Number of epochs --------
+#   * (int)
+epoch: 4
+
+
+# -------- Batch size per node --------
+#   * (int)
+batchsize: 64
+
+
+# -------- Path to dataset directory --------
+#   * /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
+dataset_dir: /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
+
+
+# -------- Path to results --------
+out: ./results
