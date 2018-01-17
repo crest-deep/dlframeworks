@@ -1,5 +1,4 @@
 #!/bin/bash
 
-python generator.py
-
+python generator.py --out ./train.sh
 qsub -g tgc-ebdcrest ./train.sh
