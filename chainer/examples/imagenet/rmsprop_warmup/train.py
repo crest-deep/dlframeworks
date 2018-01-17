@@ -181,15 +181,6 @@ def main():
     val_iter = chainer.iterators.MultithreadIterator(val, args.val_batchsize,
                                                      repeat=False)
 
-    # >>>
-    if comm.rank == 0:
-        batch = chainer.dataset.convert.concat_examples(train_iter.next())
-        model.to_cpu()
-        model(*batch)
-        chainer.serializers.save_npz('{}.npz'.format(args.arch), model)
-    return
-    # <<<
-
     # We need to change the start method of multiprocessing module if we are
     # using InfiniBand and MultiprocessIterator. This is because processes
     # often crash when calling fork if they are using Infiniband.
