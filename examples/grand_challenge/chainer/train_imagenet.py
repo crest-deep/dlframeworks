@@ -173,6 +173,7 @@ def main():
     val = chainermn.scatter_dataset(val, comm)
 
     # --------
+    # TODO: Avoid using thread
     # Since MultiprocessIterator crashes in TSUBAME 3.0, we will use
     # MultithreadIterator instead. MultithreadIterator uses Python thread to
     # load images. Note that due to Python GIL, MultithreadIterator can be
@@ -192,11 +193,15 @@ def main():
     val_iter = chainer.iterators.MultiprocessIterator(
         val, args.val_batchsize, repeat=False, n_processes=args.loaderjob)
     """
+
     # --------
+    # TODO: Switch optimzers dynamically
+    import dlframeworks
+    actual_optimizer = chainer.optimizers.MomentumSGD(lr=0.01, momentum=0.9)
+    actual_optimizer = dlframeworks.chainer.optimizers.RMSpropWarmup()
 
     # Create a multi node optimizer from a standard Chainer optimizer.
-    optimizer = chainermn.create_multi_node_optimizer(
-        chainer.optimizers.MomentumSGD(lr=0.01, momentum=0.9), comm)
+    optimizer = chainermn.create_multi_node_optimizer(actual_optimizer, comm)
     optimizer.setup(model)
 
     # Set up a trainer
@@ -216,6 +221,11 @@ def main():
     evaluator = TestModeEvaluator(val_iter, model, device=device)
     evaluator = chainermn.create_multi_node_evaluator(evaluator, comm)
     trainer.extend(evaluator, trigger=val_interval)
+
+    # --------
+    # TODO: Integrate RMSpropWarmupScheduler and RMSpropWarmup
+    trainer.extend(dlframeworks.chainer.optimizers.RMSpropWarmupScheduler(
+        comm.size, args.batchsize))
 
     # Some display and output extensions are necessary only for one worker.
     # (Otherwise, there would just be repeated outputs.)

@@ -1,4 +1,5 @@
 import argparse
+import collections
 import yaml
 
 
@@ -13,7 +14,7 @@ jobscript = """\
 
 results_dir={out}/$JOB_ID
 
-source ../modules.sh  # Load modules, set Python
+source ./modules.sh  # Load modules, set Python
 mkdir -p ${{results_dir}}
 
 module list
@@ -45,7 +46,7 @@ mpirun \\
   -npernode {npernode} \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
-  python ./train.py \\
+  python ./train_imagenet.py \\
     {dataset_dir}/train.txt \\
     {dataset_dir}/val.txt \\
     --arch {arch} \\
@@ -53,6 +54,7 @@ mpirun \\
     --batchsize {batchsize} \\
     --mean {dataset_dir}/mean.npy \\
     --out ${{results_dir}} \\
+    --root {root_dir} \\
     --initmodel {initmodels}/{arch}.npz \\
     --test
 set +v
@@ -70,6 +72,11 @@ npernode = {
     's_gpu': 1,
 }
 
+root_dir = collections.defaultdict(lambda: '.')
+root_dir['/gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012'] = \
+    '/gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012'
+root_dir['/gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped'] = '/'
+
 
 def load_yaml(path):
     with open(path, 'r') as f:
@@ -80,12 +87,15 @@ def load_yaml(path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--conf', default='config.yaml')
-    parser.add_argument('--out', default='train.sh')
+    parser.add_argument('--out', default='train_imagenet.sh')
     args = parser.parse_args()
 
     conf = load_yaml(args.conf)
+
     conf['npernode'] = npernode[conf['resource']]
     conf['np'] = int(conf['node']) * int(conf['npernode'])
+    conf['root_dir'] = root_dir[conf['dataset_dir']]
+
     with open(args.out, 'w') as f:
         f.write(jobscript.format(**conf))
 

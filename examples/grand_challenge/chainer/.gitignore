@@ -1,0 +1,4 @@
+config.yaml
+*.log
+results/
+train_imagenet.sh

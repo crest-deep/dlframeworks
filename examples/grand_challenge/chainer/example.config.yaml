@@ -42,6 +42,7 @@ batchsize: 64
 
 
 # -------- Path to dataset directory --------
+#   * /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012
 #   * /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
 dataset_dir: /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
 

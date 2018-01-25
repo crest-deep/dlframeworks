@@ -2,16 +2,6 @@
 
 Training ImageNet ILSVRC2012 on TSUBAME 3.0.
 
-There are two type training in this directory.
-
-1. `momentum_sgd`: Default training configuration in ChainerMN.
-2. `rmsprop_warmup`: PFN's large batch training configuration. Using RMSprop + momentum SGD with learning rate scheduling (you can also use LARS).
-
-To run the training script, just move to the directory that contains `train.py`
-and run `./submit`. The output will be created at `./results/$JOB_ID`.
-
-
-
 ## Dataset preparation
 
 To train ImageNet in Chainer (or ChainerMN), you need to:
@@ -37,4 +27,4 @@ write your own job script. The file `generator.py` does this parsing.
 ## Job submitting
 
 There is a file named `submit`, this invoke `generator.py` and submit the
-generated job script (`train.sh`) using `qsub`.
+generated job script (`train_imagenet.sh`) using `qsub`.

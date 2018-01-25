@@ -1,5 +1,0 @@
-#!/bin/bash
-set -eu
-
-python ../generator.py --conf ./config.yaml --out ./train.sh
-qsub -g tgc-ebdcrest ./train.sh
