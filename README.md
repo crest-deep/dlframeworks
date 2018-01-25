@@ -5,5 +5,5 @@ Documents and utility code for deep learning frameworks.
 
 ```sh
 git clone https://github.com/crest-deep/dlframeworks.git
-pip install "<path to repository root>"
+pip install -e "<path to repository root>"
 ```
