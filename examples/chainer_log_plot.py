@@ -10,11 +10,11 @@ import dlframeworks.chainer.utils
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--log', default='log')
-    parser.add_argument('--out', default='example_plot.pdf')
+    parser.add_argument('--out', default='chainer_log_plot.pdf')
     args = parser.parse_args()
 
     x = 'epoch'
-    y = 'main/validation/loss'
+    y = 'validation/main/loss'
 
     fig = matplotlib.pyplot.figure()
     ax = fig.add_subplot(1, 1, 1)
