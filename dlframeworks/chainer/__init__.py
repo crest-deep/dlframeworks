@@ -1,3 +1,4 @@
+from dlframeworks.chainer import datasets  # NOQA
 from dlframeworks.chainer import optimizers  # NOQA
 from dlframeworks.chainer import plot  # NOQA
 from dlframeworks.chainer import utils  # NOQA
