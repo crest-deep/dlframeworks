@@ -15,6 +15,8 @@ from chainer.training import extensions
 
 import chainermn
 
+import dlframeworks
+
 
 if chainer.__version__.startswith('1.'):
     import models_v1.alex as alex
@@ -196,7 +198,6 @@ def main():
 
     # --------
     # TODO: Switch optimzers dynamically
-    import dlframeworks
     actual_optimizer = chainer.optimizers.MomentumSGD(lr=0.01, momentum=0.9)
     actual_optimizer = dlframeworks.chainer.optimizers.RMSpropWarmup()
 
