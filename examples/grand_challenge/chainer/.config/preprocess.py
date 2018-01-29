@@ -126,9 +126,6 @@ mpirun \\
 
 set +v
 
-ln -fs {out}/{time}/{stdout} stdout.log
-ln -fs {out}/{time}/{stderr} stderr.log
-
 echo "................................"
 echo "Job ended on $(date)"
 """.format(**options)

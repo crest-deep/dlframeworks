@@ -275,8 +275,9 @@ def main():
     if args.resume:
         chainer.serializers.load_npz(args.resume, trainer)
 
-    save_parameters(trainer, os.path.join(args.out, 'params.json'))
-    save_code('.', os.path.join(args.out, 'codes'))
+    if comm.rank == 0:
+        save_parameters(trainer, os.path.join(args.out, 'params.json'))
+        save_code('.', os.path.join(args.out, 'codes'))
 
     trainer.run()
 
