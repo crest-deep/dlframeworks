@@ -117,10 +117,10 @@ mpirun \\
     --root {root} \\
 """.format(**options)
     if options['initmodel'] is not None:
-        shell_script += '        --initmodel {initmodel} \\\n'.format(
+        shell_script += '    --initmodel {initmodel} \\\n'.format(
             **options)
     if options['test'] is not None:
-        shell_script += '        --test \\\n'
+        shell_script += '    --test \\\n'
 
     shell_script += """\
 
