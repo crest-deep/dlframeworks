@@ -197,7 +197,8 @@ class RMSpropWarmupScheduler(chainer.training.extension.Extension):
 
     def _update_value(self, trainer):
         optimizer = self._get_optimizer(trainer)
-        epoch = optimizer.epoch
+        # Cannot use ``optimizer.epoch``, MUST use ``trainer.updater.epoch``.
+        epoch = trainer.updater.epoch
 
         if epoch < 40:
             lr = self._lr_base * 0.5
