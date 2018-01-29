@@ -2,9 +2,12 @@
 
 from __future__ import print_function
 import argparse
-import multiprocessing
+import json
+import os
 import random
+import shutil
 import sys
+import tarfile
 
 import numpy as np
 
@@ -42,6 +45,27 @@ if major <= 2 or (major == 3 and minor < 4):
                      "http://chainermn.readthedocs.io/en/master/"
                      "tutorial/tips_faqs.html#using-multiprocessiterator\n")
     exit(-1)
+
+
+def save_parameters(trainer, out):
+    updater = trainer.updater
+    iteraotr = updater.get_iterator('main')
+    optimizer = updater.get_optimizer('main')
+    batch_size = iteraotr.batch_size
+    hyperparam = optimizer.hyperparam.get_dict()
+    parameters = {}
+    parameters['hyperparam'] = hyperparam
+    parameters['batch_size'] = batch_size
+    with open(out, 'w') as f:
+        json.dump(parameters, f)
+
+
+def save_code(dirpath, out, compress=True):
+    shutil.copytree(dirpath, out)
+    if compress:
+        with tarfile.open(out + '.tar.gz', 'w:gz') as tar:
+            tar.add(out)
+        shutil.rmtree(out)
 
 
 class PreprocessedDataset(chainer.dataset.DatasetMixin):
@@ -234,6 +258,14 @@ def main():
         trainer.extend(extensions.dump_graph('main/loss'))
         trainer.extend(extensions.LogReport(trigger=log_interval))
         trainer.extend(extensions.observe_lr(), trigger=log_interval)
+        trainer.extend(extensions.observe_value(
+            'alpha_sgd',
+            lambda trainer:
+                trainer.updater.get_optimizer('main').alpha_sgd))
+        trainer.extend(extensions.observe_value(
+            'alpha_rmsprop',
+            lambda trainer:
+                trainer.updater.get_optimizer('main').alpha_rmsprop))
         trainer.extend(extensions.PrintReport([
             'epoch', 'iteration', 'main/loss', 'validation/main/loss',
             'main/accuracy', 'validation/main/accuracy', 'lr'
@@ -242,6 +274,9 @@ def main():
 
     if args.resume:
         chainer.serializers.load_npz(args.resume, trainer)
+
+    save_parameters(trainer, os.path.join(args.out, 'params.json'))
+    save_code('.', os.path.join(args.out, 'codes'))
 
     trainer.run()
 

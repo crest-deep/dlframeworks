@@ -1,5 +1,5 @@
 #!/bin/bash
 set -eu
 
-python generator.py --conf ./config.yaml --out ./train_imagenet.sh
+python preprocess.py
 qsub -g tgc-ebdcrest ./train_imagenet.sh

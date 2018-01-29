@@ -1,4 +1,5 @@
-config.yaml
-*.log
-results/
+config.*
+!.config/config.*
+preprocess.py
+!.config/preprocess.py
 train_imagenet.sh

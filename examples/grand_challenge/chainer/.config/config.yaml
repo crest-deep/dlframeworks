@@ -1,0 +1,23 @@
+nodetype: f_node
+nnodes: 1
+walltime: 01:00:00
+jobname: imagenet
+stdout: $JOB_ID.o.log
+stderr: $JOB_ID.e.log
+others:
+  j: "y"
+
+modules: ./modules.sh
+
+dataset: /gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped
+train: null
+val: null
+mean: null
+
+arch: resnet50
+epoch: 10
+batchsize: 64
+out: ./results
+root: /
+initmodel: null
+test: null
