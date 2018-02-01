@@ -73,18 +73,18 @@ class RMSpropWarmupRule(optimizer.UpdateRule):
             raise ValueError(
                 'eps of RMSprop optimizer is too small for {} ({})'.format(
                     grad.dtype.name, hp.eps))
-        ms = self.state['ms']
-        delta = self.state['v']
 
         # -------- LARS --------
+        xp = cuda.get_array_module(param.data)
         if self._lars:
-            lr = hp.lr * numpy.norm(param.data) / \
-                (numpy.norm(param.grad) +
-                 hp.weight_decay * numpy.norm(param.data))
+            lr = hp.lr * xp.norm(param.data) / \
+                (xp.norm(param.grad) +
+                 hp.weight_decay * xp.norm(param.data))
         else:
             lr = hp.lr
 
         # -------- RMSProp part --------
+        ms = self.state['ms']
         ms *= hp.mu2
         ms += (1 - hp.mu2) * grad * grad
         rmsprop_delta = -(hp.alpha_rmsprop * grad / (numpy.sqrt(ms) + eps))
@@ -109,10 +109,11 @@ class RMSpropWarmupRule(optimizer.UpdateRule):
                     grad.dtype.name, hp.eps))
 
         # -------- LARS --------
+        xp = cuda.get_array_module(param.data)
         if self._lars:
-            lr = hp.lr * cupy.norm(param.data) / \
-                (cupy.norm(param.grad) +
-                 hp.weight_decay * cupy.norm(param.data))
+            lr = hp.lr * xp.norm(param.data) / \
+                (xp.norm(param.grad) +
+                 hp.weight_decay * xp.norm(param.data))
         else:
             lr = hp.lr
 
@@ -122,14 +123,15 @@ class RMSpropWarmupRule(optimizer.UpdateRule):
             '''
                 // -------- RMSProp part --------
                 ms = mu2 * ms + (1 - mu2) * grad * grad;
-                rmsprop_delta = -(alpha_rmsprop * grad / (sqrt(ms) + eps));
+                T rmsprop_delta = -(alpha_rmsprop * grad / (sqrt(ms) + eps));
 
                 // -------- Momentum SGD part --------
                 v = mu1 * v - alpha_sgd * grad;
-                momentum_sgd_delta = v;
+                T momentum_sgd_delta = v;
 
                 param += lr * (rmsprop_delta + momentum_sgd_delta);
-            '''
+            ''',
+            'rmsprop_warmup'
         )(grad, lr, hp.alpha_sgd, hp.mu1, hp.alpha_rmsprop, hp.mu2, eps,
           param.data, self.state['ms'], self.state['v'])
 
