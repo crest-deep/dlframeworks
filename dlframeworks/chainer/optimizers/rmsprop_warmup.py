@@ -1,66 +1,67 @@
 import chainer
+from chainer.backends import cuda
+from chainer import optimizer
 import math
 import numpy
 
 
-_default_hyperparam = chainer.optimizer.Hyperparameter()
-_default_hyperparam.lr = 0.01
-_default_hyperparam.lr_rmsprop = 3e-4
-_default_hyperparam.mu1 = 0.9
-_default_hyperparam.mu2 = 0.99
-_default_hyperparam.eps = 1e-8
-_default_hyperparam.beta_center = 10
-_default_hyperparam.beta_period = 5
-_default_hyperparam.wd = 0.0005
+_default_hyperparam = optimizer.Hyperparameter()
+_default_hyperparam.lr = 0.01  # Learning rate
+_default_hyperparam.alpha_sgd = 0.01  # Learning rate in momentum SGD
+_default_hyperparam.mu1 = 0.9  # Momentum in momentum SGD
+_default_hyperparam.alpha_rmsprop = 0.01  # Learning rate in RMSProp
+_default_hyperparam.mu2 = 0.99  # Alpha in RMSProp
+_default_hyperparam.eps = 1e-8  # Epsilon in RMSProp
+_default_hyperparam.weight_decay = 0.0005  # Weight deacy rate of LARS
 
 
-class RMSpropWarmupRule(chainer.optimizer.UpdateRule):
+class RMSpropWarmupRule(optimizer.UpdateRule):
 
     """Update rule for RMSpropWarmup.
 
     Args:
+        lr (float): Learning rate.
         parent_hyperparam (~chainer.optimizer.Hyperparameter): Hyperparameter
             that provides the default values.
-        lr (float): Learning rate for SGD.
-        lr_rmsprop (float): Learning rate for RMSprop.
+        alpha_sgd (float): Learning rate for momentum SGD.
         mu1 (float): Exponential decay rate of the first order moment.
-        mu2 (float): Coefficient for the moving avarage of the gradient
-            second method.
+        alpha_rmsprop (float): Learning rate for RMSProp.
+        mu2 (float): Exponential decay rate of the second order moment.
         eps (float): Small value for the numerical stability.
-        beta_center (int):
-        beta_period (int):
-        wd (float): Weight decay
+        weight_decay (float): Weight decay rate of LARS. Default is off.
+        lars (bool): Use LARS or not.
 
     """
 
-    def __init__(self, parent_hyperparam=None, lr=None, lr_rmsprop=None,
-                 mu1=None, mu2=None, eps=None, beta_center=None,
-                 beta_period=None, wd=None, lars=False):
+    def __init__(self, parent_hyperparam=None,
+                 lr=None,
+                 alpha_sgd=None,
+                 mu1=None,
+                 alpha_rmsprop=None,
+                 mu2=None,
+                 eps=None,
+                 lars=False):
         super(RMSpropWarmupRule, self).__init__(
             parent_hyperparam or _default_hyperparam)
         if lr is not None:
-            self.hyperparam.lr = lr
-        if lr_rmsprop is not None:
-            self.hyperparam.lr_rmsprop = lr_rmsprop
+            self.lr = lr
+        if alpha_sgd is not None:
+            self.alpha_sgd = alpha_sgd
         if mu1 is not None:
-            self.hyperparam.mu1 = mu1
+            self.mu1 = mu1
+        if alpha_rmsprop is not None:
+            self.hyperparam.alpha_rmsprop = alpha_rmsprop
         if mu2 is not None:
             self.hyperparam.mu2 = mu2
         if eps is not None:
             self.hyperparam.eps = eps
-        if beta_center is not None:
-            self.hyperparam.beta_center = beta_center
-        if beta_period is not None:
-            self.hyperparam.beta_period = beta_period
-        if wd is not None:
-            self.hyperparam.wd = wd
         self._lars = lars
 
     def init_state(self, param):
-        xp = chainer.cuda.get_array_module(param.data)
-        with chainer.cuda.get_device_from_array(param.data):
-            self.state['m'] = xp.zeros_like(param.data)
-            self.state['d'] = xp.zeros_like(param.data)
+        xp = cuda.get_array_module(param.data)
+        with cuda.get_device_from_array(param.data):
+            self.state['ms'] = xp.zeros_like(param.data)
+            self.state['v'] = xp.zeros_like(param.data)
 
     def update_core_cpu(self, param):
         grad = param.grad
@@ -72,18 +73,29 @@ class RMSpropWarmupRule(chainer.optimizer.UpdateRule):
             raise ValueError(
                 'eps of RMSprop optimizer is too small for {} ({})'.format(
                     grad.dtype.name, hp.eps))
-        m = self.state['m']
-        d = self.state['d']
+        ms = self.state['ms']
+        delta = self.state['v']
 
+        # -------- LARS --------
         if self._lars:
-            lr = hp.lr * numpy.norm(param.data) / (numpy.norm(param.grad) + hp.wd * numpy.norm(param.data))
+            lr = hp.lr * numpy.norm(param.data) / \
+                (numpy.norm(param.grad) +
+                 hp.weight_decay * numpy.norm(param.data))
         else:
             lr = hp.lr
-        m *= hp.mu2
-        m += (1 - hp.mu2) * grad * grad
-        d *= hp.mu1
-        d -= grad * (hp.alpha_sgd + hp.alpha_rmsprop/(numpy.sqrt(m) + eps))
-        param.data += lr * d
+
+        # -------- RMSProp part --------
+        ms *= hp.mu2
+        ms += (1 - hp.mu2) * grad * grad
+        rmsprop_delta = -(hp.alpha_rmsprop * grad / (numpy.sqrt(ms) + eps))
+
+        # -------- Momentum SGD part --------
+        v = self.state['v']
+        v *= self.hyperparam.mu1
+        v -= self.hyperparam.alpha_sgd * grad
+        momentum_sgd_delta = v
+
+        param.data += lr * (rmsprop_delta + momentum_sgd_delta)
 
     def update_core_gpu(self, param):
         grad = param.grad
@@ -96,77 +108,72 @@ class RMSpropWarmupRule(chainer.optimizer.UpdateRule):
                 'eps of RMSprop optimizer is too small for {} ({})'.format(
                     grad.dtype.name, hp.eps))
 
+        # -------- LARS --------
         if self._lars:
-            lr = hp.lr * cupy.norm(param.data) / (cupy.norm(param.grad) + hp.wd * cupy.norm(param.data))
+            lr = hp.lr * cupy.norm(param.data) / \
+                (cupy.norm(param.grad) +
+                 hp.weight_decay * cupy.norm(param.data))
         else:
             lr = hp.lr
-        chainer.cuda.elementwise(
-            'T grad, T lr, T lr_rmsprop, T mu1, T mu2, T eps, T alpha_sgd,\
-             T alpha_rmsprop',
-            'T param, T m, T d',
+
+        cuda.elementwise(
+            'T grad, T lr, T alpha_sgd, T mu1, T alpha_rmsprop, T mu2, T eps',
+            'T param, T ms, T v',
             '''
-                m = mu2 * m + (1 - mu2) * grad * grad;
-                d = mu1 * d - grad *
-                    (alpha_sgd + alpha_rmsprop / (sqrt(m) + eps));
-                param += lr * d;
-            ''',
-            'rmsprop_warmup')(
-                grad, lr, hp.lr_rmsprop, hp.mu1, hp.mu2, eps,
-                hp.alpha_sgd, hp.alpha_rmsprop,
-                param.data, self.state['m'], self.state['d'])
+                // -------- RMSProp part --------
+                ms = mu2 * ms + (1 - mu2) * grad * grad;
+                rmsprop_delta = -(alpha_rmsprop * grad / (sqrt(ms) + eps));
+
+                // -------- Momentum SGD part --------
+                v = mu1 * v - alpha_sgd * grad;
+                momentum_sgd_delta = v;
+
+                param += lr * (rmsprop_delta + momentum_sgd_delta);
+            '''
+        )(grad, lr, hp.alpha_sgd, hp.mu1, hp.alpha_rmsprop, hp.mu2, eps,
+          param.data, self.state['ms'], self.state['v'])
 
 
-class RMSpropWarmup(chainer.optimizer.GradientMethod):
+class RMSpropWarmup(optimizer.GradientMethod):
 
-    """RMSprop warmup optimizer.
+    """RMSprop optimizer.
 
     See: T. Tieleman and G. Hinton (2012). Lecture 6.5 - rmsprop, COURSERA:
     Neural Networks for Machine Learning.
 
     Args:
-        lr (float): Learning rate for SGD.
-        lr_rmsprop (float): Learning rate for RMSprop.
+        lr (float): Learning rate.
+        alpha_sgd (float): Learning rate.
         mu1 (float): Exponential decay rate of the first order moment.
-        mu2 (float): Coefficient for the moving avarage of the gradient
-            second method.
+        alpha_rmsprop (float): Learning rate.
+        mu2 (float): Exponential decay rate of the second order moment.
         eps (float): Small value for the numerical stability.
-        beta_center (int):
-        beta_period (int):
-        wd (float): Weight decay.
 
     """
 
     def __init__(self,
                  lr=_default_hyperparam.lr,
-                 lr_rmsprop=_default_hyperparam.lr_rmsprop,
-                 mu1=_default_hyperparam.mu1, mu2=_default_hyperparam.mu2,
+                 alpha_sgd=_default_hyperparam.alpha_sgd,
+                 mu1=_default_hyperparam.mu1,
+                 alpha_rmsprop=_default_hyperparam.alpha_rmsprop,
+                 mu2=_default_hyperparam.mu2,
                  eps=_default_hyperparam.eps,
-                 beta_center=_default_hyperparam.beta_center,
-                 beta_period=_default_hyperparam.beta_period,
-                 wd=_default_hyperparam.wd, lars=False):
+                 lars=False):
         super(RMSpropWarmup, self).__init__()
         self.hyperparam.lr = lr
-        self.hyperparam.lr_rmsprop = lr_rmsprop
+        self.hyperparam.alpha_sgd = alpha_sgd
         self.hyperparam.mu1 = mu1
+        self.hyperparam.alpha_rmsprop = alpha_rmsprop
         self.hyperparam.mu2 = mu2
         self.hyperparam.eps = eps
-        self.hyperparam.beta_center = beta_center
-        self.hyperparam.beta_period = beta_period
-        self.hyperparam.wd = wd
-        self.hyperparam.alpha_sgd = 0
-        self.hyperparam.alpha_rmsprop = 0
         self._lars = lars
 
-    lr = chainer.optimizer.HyperparameterProxy('lr')
-    lr_rmsprop = chainer.optimizer.HyperparameterProxy('lr_rmsprop')
-    mu1 = chainer.optimizer.HyperparameterProxy('mu1')
-    mu2 = chainer.optimizer.HyperparameterProxy('mu2')
-    eps = chainer.optimizer.HyperparameterProxy('eps')
-    beta_center = chainer.optimizer.HyperparameterProxy('beta_center')
-    beta_period = chainer.optimizer.HyperparameterProxy('beta_period')
-    wd = chainer.optimizer.HyperparameterProxy('wd')
-    alpha_sgd = chainer.optimizer.HyperparameterProxy('alpha_sgd')
-    alpha_rmsprop = chainer.optimizer.HyperparameterProxy('alpha_rmsprop')
+    lr = optimizer.HyperparameterProxy('lr')
+    alpha_sgd = optimizer.HyperparameterProxy('alpha_sgd')
+    mu1 = optimizer.HyperparameterProxy('mu1')
+    alpha_rmsprop = optimizer.HyperparameterProxy('alpha_rmsprop')
+    mu2 = optimizer.HyperparameterProxy('mu2')
+    eps = optimizer.HyperparameterProxy('eps')
 
     def create_update_rule(self):
         return RMSpropWarmupRule(self.hyperparam, self._lars)
@@ -176,28 +183,26 @@ class RMSpropWarmupScheduler(chainer.training.extension.Extension):
     default_name = 'rmsprop_warmup_scheduler'
     priority = chainer.training.extension.PRIORITY_WRITER
 
-    def __init__(self, n_processes, batchsize, optimizer=None):
+    def __init__(self, n_processes, batchsize, beta_center=10, beta_period=5,
+                 optimizer=None):
         self._lr_base = 0.1 * n_processes * batchsize * 0.00390625
+        self._beta_center = beta_center
+        self._beta_period = beta_period
         self._optimizer = optimizer
 
     def initialize(self, trainer):
         optimizer = self._get_optimizer(trainer)
         self._lr = getattr(optimizer, 'lr')
-        self._lr_rmsprop = getattr(optimizer, 'lr_rmsprop')
-        self._beta_center = getattr(optimizer, 'beta_center')
-        self._beta_period = getattr(optimizer, 'beta_period')
-
-        self._update_value(trainer)
+        self._update(trainer)
 
     def __call__(self, trainer):
-        self._update_value(trainer)
+        self._update(trainer)
 
     def _get_optimizer(self, trainer):
         return self._optimizer or trainer.updater.get_optimizer('main')
 
-    def _update_value(self, trainer):
-        optimizer = self._get_optimizer(trainer)
-        # Cannot use ``optimizer.epoch``, MUST use ``trainer.updater.epoch``.
+    def _update(self, trainer):
+        # CANNOT use ``optimizer.epoch``, MUST use ``trainer.updater.epoch``.
         epoch = trainer.updater.epoch
 
         if epoch < 40:
@@ -218,8 +223,9 @@ class RMSpropWarmupScheduler(chainer.training.extension.Extension):
         else:
             alpha_sgd = 1
 
-        alpha_rmsprop = (1 - alpha_sgd) * self._lr_rmsprop / lr
+        alpha_rmsprop = (1 - alpha_sgd) * 0.0003 / lr
 
+        optimizer = self._get_optimizer(trainer)
         setattr(optimizer, 'lr', lr)
         setattr(optimizer, 'alpha_sgd', alpha_sgd)
         setattr(optimizer, 'alpha_rmsprop', alpha_rmsprop)
