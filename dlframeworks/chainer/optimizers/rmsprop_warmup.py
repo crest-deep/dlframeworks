@@ -87,15 +87,15 @@ class RMSpropWarmupRule(optimizer.UpdateRule):
         ms = self.state['ms']
         ms *= hp.mu2
         ms += (1 - hp.mu2) * grad * grad
-        rmsprop_delta = -(hp.alpha_rmsprop * grad / (numpy.sqrt(ms) + eps))
+        delta = -(hp.alpha_rmsprop * grad / (numpy.sqrt(ms) + eps))
 
         # -------- Momentum SGD part --------
         v = self.state['v']
         v *= self.hyperparam.mu1
         v -= self.hyperparam.alpha_sgd * grad
-        momentum_sgd_delta = v
+        delta += v
 
-        param.data += lr * (rmsprop_delta + momentum_sgd_delta)
+        param.data += lr * delta
 
     def update_core_gpu(self, param):
         grad = param.grad
@@ -123,13 +123,13 @@ class RMSpropWarmupRule(optimizer.UpdateRule):
             '''
                 // -------- RMSProp part --------
                 ms = mu2 * ms + (1 - mu2) * grad * grad;
-                T rmsprop_delta = -(alpha_rmsprop * grad / (sqrt(ms) + eps));
+                T delta = -(alpha_rmsprop * grad / (sqrt(ms) + eps));
 
                 // -------- Momentum SGD part --------
                 v = mu1 * v - alpha_sgd * grad;
-                T momentum_sgd_delta = v;
+                delta = delta + v;
 
-                param += lr * (rmsprop_delta + momentum_sgd_delta);
+                param += lr * delta;
             ''',
             'rmsprop_warmup'
         )(grad, lr, hp.alpha_sgd, hp.mu1, hp.alpha_rmsprop, hp.mu2, eps,
