@@ -61,14 +61,6 @@ def save_parameters(trainer, out):
         json.dump(parameters, f)
 
 
-def save_code(dirpath, out, compress=True):
-    shutil.copytree(dirpath, out)
-    if compress:
-        with tarfile.open(out + '.tar.gz', 'w:gz') as tar:
-            tar.add(out)
-        shutil.rmtree(out)
-
-
 class PreprocessedDataset(chainer.dataset.DatasetMixin):
 
     def __init__(self, path, root, mean, crop_size, random=True):
@@ -288,7 +280,6 @@ def main():
 
     if comm.rank == 0:
         save_parameters(trainer, os.path.join(args.out, 'params.json'))
-        save_code('.', os.path.join(args.out, 'codes'))
 
     trainer.run()
 

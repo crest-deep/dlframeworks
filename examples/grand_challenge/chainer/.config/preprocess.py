@@ -1,10 +1,19 @@
+# ****************************************************************
+# Preprocess for training
+#
+#   This script does three thing
+#       1. Generate a job script according to the config file (done by
+#          `generate_script()`).
+#       2. Save the files in the working directory
+#       3. Prints the generated job script's full path at stdout.
+#
+# ****************************************************************
 import argparse
 import datetime
 import json
 import os
 import shutil
 import tarfile
-import toml
 import yaml
 
 
@@ -19,15 +28,59 @@ npernodes = {
 
 
 def load_options(filepath):
+    """Load options as a Python dict from a file.
+
+    Only Json and Yaml files are supported.
+
+    Args:
+        filepath(str): Path to a file which contains options.
+
+    Returns:
+        dict: Loaded dictionary.
+
+    """
     _, extension = os.path.splitext(filepath)
     if extension == '.json':
         loader = json.load
     elif extension == '.yaml' or extension == '.yml':
         loader = yaml.load
     else:
-        raise ValueError('This file type is not supported.')
+        raise ValueError('Extension {} is not supported.'.format(extension))
+
     with open(filepath, 'r') as f:
         return loader(f)
+
+
+class TimeSingleton(object):
+    """Singleton for getting a time
+
+    To use single timestamp for all, we use singleton.
+
+    """
+    _instance = None
+    _date = None
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls, *args, **kwargs)
+        return cls._instance
+
+    def __init__(self):
+        if self._date is None:
+            self._date = datetime.datetime.now()
+
+    def __call__(self, fmt='%y.%m.%d_%H.%M.%S'):
+        return self._date.strftime(fmt)
+
+
+def get_time(fmt='%y.%m.%d_%H.%M.%S'):
+    """Get timestamp. 
+
+    Args:
+        fmt(str): Format to parse the datetime.
+    """
+    t = TimeSingleton()
+    return t(fmt)
 
 
 def get_npernode(options):
@@ -39,21 +92,20 @@ def get_np(options):
     return npernode * options['nnodes']
 
 
-def get_time(format='%y.%m.%d_%H.%M.%S'):
-    date = datetime.datetime.now()
-    return date.strftime(format)
-
-
 def parse_options(options):
     options['time'] = get_time()
+    options['result_direcory'] = os.path.join(options['out'], options['time'])
+    options['working_direcory'] = os.path.join(
+        options['result_direcory'], 'code')
+
     shell_script = """\
 #!/bin/sh
 #$ -cwd
 #$ -l {nodetype}={nnodes}
 #$ -l h_rt={walltime}
 #$ -N {jobname}
-#$ -o {out}/{time}/{stdout}
-#$ -e {out}/{time}/{stderr}
+#$ -o {result_direcory}/{stdout}
+#$ -e {result_direcory}/{stderr}
 """.format(**options)
     others = options['others']
     if others is not None:
@@ -64,7 +116,9 @@ def parse_options(options):
 
 source {modules}
 
-mkdir -p {out}/{time}
+mkdir -p {result_direcory}
+
+cd {working_direcory}  # We need to change the directory
 
 module list
 echo ""
@@ -113,7 +167,7 @@ mpirun \\
     --epoch {epoch} \\
     --batchsize {batchsize} \\
     --mean {mean} \\
-    --out {out}/{time} \\
+    --out {result_direcory} \\
     --root {root} \\
 """.format(**options)
     if options['initmodel'] is not None:
@@ -132,6 +186,12 @@ echo "Job ended on $(date)"
     return shell_script
 
 
+def copy_code(dst, src='.'):
+    ignore = shutil.ignore_patterns(
+        'README.md', '.gitignore', '.config')
+    shutil.copytree(src, dst, ignore=ignore)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--conf', default='config.yaml')
@@ -142,6 +202,9 @@ def main():
     shell_script = parse_options(options)
     with open(args.out, 'w') as f:
         f.write(shell_script)
+    dst = os.path.join(options['out'], get_time(), 'code')
+    copy_code(dst)
+    print(os.path.join(dst, args.out))  # Stdout is passed to `submit` script.
 
 
 if __name__ == '__main__':
