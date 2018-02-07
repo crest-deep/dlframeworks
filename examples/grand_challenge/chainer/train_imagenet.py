@@ -3,6 +3,7 @@
 from __future__ import print_function
 import argparse
 import json
+import multiprocessing
 import os
 import random
 import shutil
@@ -204,21 +205,21 @@ def main():
     # MultithreadIterator instead. MultithreadIterator uses Python thread to
     # load images. Note that due to Python GIL, MultithreadIterator can be
     # slower than MultiprocessIterator.
+    """
     train_iter = chainer.iterators.MultithreadIterator(train, args.batchsize)
     val_iter = chainer.iterators.MultithreadIterator(val, args.val_batchsize,
                                                      repeat=False)
+    """
 
     # We need to change the start method of multiprocessing module if we are
     # using InfiniBand and MultiprocessIterator. This is because processes
     # often crash when calling fork if they are using Infiniband.
     # (c.f., https://www.open-mpi.org/faq/?category=tuning#fork-warning )
-    """
     multiprocessing.set_start_method('forkserver')
     train_iter = chainer.iterators.MultiprocessIterator(
         train, args.batchsize, n_processes=args.loaderjob)
     val_iter = chainer.iterators.MultiprocessIterator(
         val, args.val_batchsize, repeat=False, n_processes=args.loaderjob)
-    """
 
     # --------
     # TODO: Switch optimzers dynamically
@@ -237,10 +238,18 @@ def main():
     val_interval = (10, 'iteration') if args.test else (1, 'epoch')
     log_interval = (10, 'iteration') if args.test else (1, 'epoch')
 
+    val_interval = (400 / comm.size, 'iteration')
+    log_interval = (400 / comm.size, 'iteration')
+
+    # --------
+    # TODO: Automatically do the c/r
+    # We will disable c/r which consumes disk space.
+    """
     checkpointer = chainermn.create_multi_node_checkpointer(
         name='imagenet-example', comm=comm)
     checkpointer.maybe_load(trainer, optimizer)
     trainer.extend(checkpointer, trigger=checkpoint_interval)
+    """
 
     # Create a multi node evaluator from an evaluator.
     evaluator = TestModeEvaluator(val_iter, model, device=device)
@@ -261,11 +270,13 @@ def main():
         trainer.extend(extensions.observe_value(
             'alpha_sgd',
             lambda trainer:
-                trainer.updater.get_optimizer('main').alpha_sgd))
+                trainer.updater.get_optimizer('main').alpha_sgd),
+                       trigger=log_interval)
         trainer.extend(extensions.observe_value(
             'alpha_rmsprop',
             lambda trainer:
-                trainer.updater.get_optimizer('main').alpha_rmsprop))
+                trainer.updater.get_optimizer('main').alpha_rmsprop),
+                       trigger=log_interval)
         trainer.extend(extensions.PrintReport([
             'epoch', 'iteration', 'main/loss', 'validation/main/loss',
             'main/accuracy', 'validation/main/accuracy', 'lr'
