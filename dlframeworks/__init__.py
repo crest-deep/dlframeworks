@@ -1,2 +1,2 @@
 from dlframeworks import chainer
-from dlframeworks import tensorflow
+# from dlframeworks import tensorflow
