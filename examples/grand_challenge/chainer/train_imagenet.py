@@ -150,6 +150,10 @@ def main():
                         help='Output directory')
     parser.add_argument('--root', '-R', default='.',
                         help='Root directory path of image files')
+    parser.add_argument('--train-root', default='.',
+                        help='Root directory path of train image files')
+    parser.add_argument('--val-root', default='.',
+                        help='Root directory path of val image files')
     parser.add_argument('--val_batchsize', '-b', type=int, default=250,
                         help='Validation minibatch size')
     parser.add_argument('--test', action='store_true')
@@ -182,9 +186,10 @@ def main():
     # Datasets of worker 0 are evenly split and distributed to all workers.
     mean = np.load(args.mean)
     if comm.rank == 0:
-        train = PreprocessedDataset(args.train, args.root, mean, model.insize)
+        train = PreprocessedDataset(
+            args.train, args.train_root, mean, model.insize)
         val = PreprocessedDataset(
-            args.val, args.root, mean, model.insize, False)
+            args.val, args.val_root, mean, model.insize, False)
     else:
         train = None
         val = None
