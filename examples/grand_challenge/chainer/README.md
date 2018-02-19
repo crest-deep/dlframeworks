@@ -30,7 +30,7 @@ following process will be done.
 3. `preprocess.py` file generates `main.sh` file.
 4. `preprocess.py` file copies the files in the current directory to the `out` (which is specified in the `config.yaml` file).
 5. `preprocess.py` file outputs the path to the `main.sh` and passes it the `qsub` command.
-6. Starting the actual Python script `main.py`.
+6. Starting the actual Python script `main.py` by submitting to the job scheduler.
 
 There is a file named `config.yaml` and `config.json` under `.config`
 directory. These files define the paths and training settings (e.g. number of
