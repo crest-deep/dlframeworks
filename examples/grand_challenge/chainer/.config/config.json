@@ -11,16 +11,20 @@
 
   "modules": "./modules.sh",
 
-  "dataset": "/gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped",
-  "train": null,
-  "val": null,
-  "mean": null,
+  "nclasses": 16
+  "mean": "./mean.npy",
 
   "arch": "resnet50",
   "epoch": 10,
   "batchsize": 64,
+  "loaderjob": 8,
   "out": "results",
-  "root": "/",
-  "initmodel": null,
-  "test": null
+  "resume": null,
+  "initmodel": "/gs/hs0/tgb-crest-deep/17M30275/datasets/initmodels/resnet50.npz",
+  "test": null,
+
+  "communicator": "hierarchical",
+  "loadtype": "original",
+  "iterator": "process",
+  "optimizer": "adam"
 }

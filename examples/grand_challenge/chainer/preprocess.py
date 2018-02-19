@@ -2,10 +2,9 @@
 # Preprocess for training
 #
 #   This script does three thing
-#       1. Generate a job script according to the config file (done by
-#          `generate_script()`).
-#       2. Save the files in the working directory
-#       3. Prints the generated job script's full path at stdout.
+#       1. Generate a job script using the config file.
+#       2. Copy the setting filesa and Python source codes to the result dir.
+#       3. Prints the generated job script's full path to stdout.
 #
 # ****************************************************************
 import argparse
@@ -145,15 +144,21 @@ echo "................................"
 
     options['np'] = get_np(options)
     options['npernode'] = get_npernode(options)
-    if options['train'] is None:
-        options['train'] = os.path.join(options['dataset'], 'train.txt')
-    if options['val'] is None:
-        options['val'] = os.path.join(options['dataset'], 'val.txt')
-    if options['mean'] is None:
-        options['mean'] = os.path.join(options['dataset'], 'mean.npy')
+
+    data_root = '/gs/hs0/tgb-crest-deep/data/images/ilsvrc12'
+    if options['nclasses'] == 1000:
+        options['train'] = os.path.join(data_root, 'train.txt')
+        options['val'] = os.path.join(data_root, 'val.txt')
+    else:
+        nclasses = int(options['nclasses'])
+        train = 'train{:03d}.txt'.format(nclasses)
+        val = 'val{:03d}.txt'.format(nclasses)
+        options['train'] = os.path.join(data_root, train)
+        options['val'] = os.path.join(data_root, val)
+    options['train_root'] = os.path.join(data_root, 'train')
+    options['val_root'] = os.path.join(data_root, 'val')
 
     shell_script += """\
-set -v
 
 mpirun \\
   -output-proctable \\
@@ -162,23 +167,31 @@ mpirun \\
   -npernode {npernode} \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
-  python ./train_imagenet.py {train} {val} \\
+  python ./main.py \\
+    {train} \\
+    {val} \\
     --arch {arch} \\
-    --epoch {epoch} \\
     --batchsize {batchsize} \\
+    --epoch {epoch} \\
+    --loaderjob {loaderjob} \\
     --mean {mean} \\
     --out {result_direcory} \\
-    --root {root} \\
+    --train-root {train_root} \\
+    --val-root {val_root} \\
+    --communicator {communicator} \\
+    --loadtype {loadtype} \\
+    --iterator {iterator} \\
+    --optimizer {optimizer} \\
 """.format(**options)
     if options['initmodel'] is not None:
-        shell_script += '    --initmodel {initmodel} \\\n'.format(
-            **options)
+        shell_script += '    --initmodel {initmodel} \\\n'.format(**options)
+    if options['resume'] is not None:
+        shell_script += '    --resume {resume} \\\n'.format(**options)
     if options['test'] is not None:
         shell_script += '    --test \\\n'
 
     shell_script += """\
 
-set +v
 
 echo "................................"
 echo "Job ended on $(date)"
@@ -195,7 +208,7 @@ def copy_code(dst, src='.'):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--conf', default='config.yaml')
-    parser.add_argument('--out', default='train_imagenet.sh')
+    parser.add_argument('--out', default='main.sh')
     args = parser.parse_args()
 
     options = load_options(args.conf)
