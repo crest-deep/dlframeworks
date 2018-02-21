@@ -136,9 +136,8 @@ class _CustomDataset(chainer.dataset.DatasetMixin):
         n = len(self._locations)
         for i, location in enumerate(self._locations):
             path = os.path.join(self._root, location[0])
-            image = _read_image(path, self._crop_size, self._crop_size,
-                                self._mean, self._random)
-            images.append(image)
+            images.append(_read_image(path, self._crop_size, self._crop_size,
+                                      self._mean, self._random))
             labels.append(location[1])
         images = np.array(images, dtype=np.float32)
         labels = np.array(labels, dtype=np.int32)
