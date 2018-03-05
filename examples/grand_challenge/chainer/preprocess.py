@@ -111,9 +111,13 @@ def parse_options(options):
         for k, v in others.items():
             shell_script += '#$ -{} {}\n'.format(k, v)
 
+    shell_script += '. /etc/profile.d/modules.sh\n'
+    for k, v in options['modules'].items():
+        shell_script += 'module load {}\n'.format(v)
+
     shell_script += """\
 
-source {modules}
+source {vars}
 
 mkdir -p {result_direcory}
 
@@ -130,6 +134,7 @@ echo $LD_LIBRARY_PATH | tr ":" "\\n"
 echo "-------------------------------------------------"
 echo ""
 echo "---------------- Python ----------------"
+pyenv version
 python --version
 echo "----------------------------------------"
 echo ""
@@ -158,15 +163,30 @@ echo "................................"
     options['train_root'] = os.path.join(data_root, 'train')
     options['val_root'] = os.path.join(data_root, 'val')
 
-    shell_script += """\
-
+    if 'intel' in options['modules']['mpi']:
+        mpirun_cmd = """\
+mpiexec.hydra \\
+  -ppn {npernode} \\
+  -n {np} \\
+  -print-rank-map \\
+""".format(**options)
+    elif 'open' in options['modules']['mpi']:
+        mpirun_cmd = """\
 mpirun \\
+  -npernode {npernode} \\
+  -np {np} \\
   -output-proctable \\
   -mca pml ob1 \\
-  -np {np} \\
-  -npernode {npernode} \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
+""".format(**options)
+    else:
+        raise ValueError('No MPI implementation supported: {}'.format(
+            options['modules']['mpi']))
+
+    shell_script += mpirun_cmd
+
+    shell_script += """\
   python ./main.py \\
     {train} \\
     {val} \\

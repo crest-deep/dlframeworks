@@ -7,7 +7,13 @@ stderr: $JOB_ID.e.log
 others:
   j: "y"
 
-modules: ./modules.sh
+modules:
+  cuda: cuda/8.0.61
+  cudnn: cudnn/7.0
+  nccl: nccl/2.1
+  mpi: openmpi/2.1.2
+
+vars: ./modules.sh
 
 nclasses: 16
 mean: mean.npy
