@@ -1,5 +1,5 @@
 #!/bin/bash
 set -eu
 
-python preprocess.py
-qsub -g tgc-ebdcrest ./train_imagenet.sh
+jobscript=$(python preprocess.py)
+qsub -g tgc-ebdcrest ${jobscript}

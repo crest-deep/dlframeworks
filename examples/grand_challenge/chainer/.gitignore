@@ -1,5 +1,4 @@
-config.*
-!.config/config.*
-preprocess.py
-!.config/preprocess.py
-train_imagenet.sh
+config.yaml
+config.json
+!/.config/*
+main.sh

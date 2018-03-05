@@ -9,18 +9,29 @@
     "j": "yes"
   },
 
-  "modules": "./modules.sh",
+  "modules": {
+    "cuda": "cuda/8.0.61",
+    "cudnn": "cudnn/7.0",
+    "nccl": "nccl/2.1",
+    "mpi": "openmpi/2.1.2"
+  },
 
-  "dataset": "/gs/hs0/tgb-crest-deep/17M30275/datasets/ILSVRC2012-8-cropped",
-  "train": null,
-  "val": null,
-  "mean": null,
+  "vars": "./modules.sh",
+
+  "nclasses": 16
+  "mean": "./mean.npy",
 
   "arch": "resnet50",
   "epoch": 10,
   "batchsize": 64,
+  "loaderjob": 8,
   "out": "results",
-  "root": "/",
-  "initmodel": null,
-  "test": null
+  "resume": null,
+  "initmodel": "/gs/hs0/tgb-crest-deep/17M30275/datasets/initmodels/resnet50.npz",
+  "test": null,
+
+  "communicator": "hierarchical",
+  "loadtype": "original",
+  "iterator": "process",
+  "optimizer": "adam"
 }
