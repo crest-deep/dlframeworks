@@ -112,6 +112,7 @@ def parse_options(options):
             shell_script += '#$ -{} {}\n'.format(k, v)
 
     shell_script += '. /etc/profile.d/modules.sh\n'
+    shell_script += '. ${HOME}/.local/modules.sh\n'
     for k, v in options['modules'].items():
         shell_script += 'module load {}\n'.format(v)
 
