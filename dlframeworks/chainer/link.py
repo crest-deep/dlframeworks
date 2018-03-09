@@ -85,7 +85,7 @@ def update_persistents(a, b, c, rule):
             c_link.__dict__[name] = rule(a_param, b_param)
 
 
-def getparam(link, name):
+def getparam(link, name, depth='-1'):
     """Get a parameter according to its name.
     
     This function returns a parameter which has a name ``name``. The name
@@ -95,9 +95,12 @@ def getparam(link, name):
     Args:
         link (:class:`chainer.Link`): Searching source.
         name (str): Name of searching parameter.
+        depth (int): Depth of searching link, if it is smaller than or equal to
+            0, it is infinity.
     """
+    depth = float('inf') if depth < 1 else depth
     for _name, _param in link.namedparams():
-        if _name == name:
+        if _name == name and _name.count('/') <= depth:
             return _param
 
 
