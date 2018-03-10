@@ -179,7 +179,13 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def cov_ema_update(self):
         for linkname, (rank, a, g) in self.act_grad_dict.items():
-            mz, _ = a.shape
+            if a.ndim == 2:
+                mz, _ = a.shape
+            elif a.ndim == 4:
+                _, _, mz, _ = a.shape
+            else:
+                raise ValueError('Invalid or unsupported shape: {}.'.format(
+                    a.shape))
             ones = np.ones(mz)
             a_plus = np.column_stack((a, ones))
             A = a_plus.T.dot(a_plus) / mz
@@ -199,6 +205,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 np.sqrt(self.hyperparam.damping)
             G_dmp = np.identity(G_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
-            A_inv = np.linalg(A_ema + A_dmp)
-            G_inv = np.linalg(G_ema + G_dmp)
+            A_inv = np.linalg.inv(A_ema + A_dmp)
+            G_inv = np.linalg.inv(G_ema + G_dmp)
             self.inv_dict[linkname] = (A_inv, G_inv)
