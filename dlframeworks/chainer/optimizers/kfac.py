@@ -56,8 +56,14 @@ class KFACUpdater(training.updaters.StandardUpdater):
 
     def __init__(self, iterator, optimizer, converter=convert.concat_examples,
                  models=None, device=None, loss_func=None, loss_scale=None):
-        assert isinstance(optimizer, KFAC), \
-            'The optimizer has to be an instance of KFAC.'
+        if hasattr(optimizer, 'actual_optimizer'):
+            # ChainerMN
+            assert isinstance(optimizer.actual_optimizer, KFAC), \
+                'The optimizer has to be an instance of KFAC.'
+        else:
+            # Chainer
+            assert isinstance(optimizer, KFAC), \
+                'The optimizer has to be an instance of KFAC.'
         super(KFACUpdater, self).__init__(
             iterator=iterator,
             optimizer=optimizer,
