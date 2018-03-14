@@ -1,5 +1,6 @@
 import chainer
 from chainer import training
+from chainer import optimizer
 from chainer.backends import cuda
 from chainer.dataset import convert
 from collections import OrderedDict
@@ -39,14 +40,12 @@ def _kfac_backward(link, backward_main, retain_grad=True,
     for node, grad in grads.items():
         creator_node = node.creator_node  # parent function node
         if creator_node is not None:  # ignore leaf node
-            if getattr(creator_node, '_input_indexes_to_retain') is not None:
-                a, param = creator_node.get_retained_inputs()
+            if isinstance(creator_node, chainer.functions.connection.linear.LinearFunction) \
+              or isinstance(creator_node, chainer.functions.connection.convolution_2d.Convolution2DFunction):
+                (a, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
-                if linkname is not None:
-                    # params that its linkname is None, are output layer (e.g.
-                    # softmax layer). These layers do not have laernable
-                    # param inside.
-                    data[linkname] = (creator_node.rank, a.data, grad.data)
+                assert linkname is not None, 'linkname cannot be None.'
+                data[linkname] = (creator_node.rank, a.data, grad.data, param.data.shape)
     # Sort by its rank
     data = OrderedDict(sorted(data.items(), key=lambda x: x[1][0]))
     return data
@@ -99,12 +98,12 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
         param.data -= self.hyperparam.lr * grad
 
     def update_core_gpu(self, param):
-        kfgrad = param.kfgrad
-        if kfgrad is None:
+        grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
+        if grad is None:
             return
-        cuda.elementwise('T kfgrad, T lr', 'T param',
-                         'param -= lr * kfgrad',
-                         'ngd')(kfgrad, self.hyperparam.lr, param.data)
+        cuda.elementwise('T grad, T lr', 'T param',
+                         'param -= lr * grad',
+                         'ngd')(grad, self.hyperparam.lr, param.data)
 
 
 class KFAC(chainer.optimizer.GradientMethod):
@@ -120,14 +119,17 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
-        self.act_grad_dict = {}
+        self.data_dict = {}
         self.cov_ema_dict = {}
         self.inv_dict = {}
+
+    lr = optimizer.HyperparameterProxy('lr')
 
     def create_update_rule(self):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
+        print ('update')
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -139,7 +141,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             # function to enable KFAC.
             # loss.backward(loss_scale=self._loss_scale)
             backward_main = getattr(loss, '_backward_main')
-            self.act_grad_dict = _kfac_backward(self.target, backward_main)
+            self.data_dict = _kfac_backward(self.target, backward_main)
             del loss
 
             def get_param(path):
@@ -148,7 +150,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
-            for linkname in self.act_grad_dict.keys():
+            for linkname in self.data_dict.keys():
                 if linkname in self.inv_dict.keys():
                     param_W = get_param(linkname + '/W')
                     param_b = get_param(linkname + '/b')
@@ -160,7 +162,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                     if param_b is not None:
                         grad = np.column_stack([grad, param_b.grad])
                     A_inv, G_inv = self.inv_dict[linkname]
-                    # TODO change for CPU/GPU impl
+                    # TODO CPU/GPU impl
                     kfgrads = np.dot(np.dot(G_inv.T, grad), A_inv)
                     if param_b is not None:
                         param_W.kfgrad = kfgrads[:, :-1]
@@ -178,20 +180,65 @@ class KFAC(chainer.optimizer.GradientMethod):
             param.update()
 
     def cov_ema_update(self):
-        for linkname, (rank, a, g) in self.act_grad_dict.items():
+        print ('cov_ema_update')
+        # TODO CPU/GPU impl
+        def cov_linear(a, g):
+            print('cov_linear')
+            N, _ = a.shape
+            ones = np.ones(N)
+            a_plus = np.column_stack((a, ones))
+            A = a_plus.T.dot(a_plus) / N
+            G = g.T.dot(g) / N
+            return A, G
+
+        # TODO CPU/GPU impl
+        def cov_conv2d(a, g, param_shape):
+            print('cov_conv2d')
+            N, J, H, W = a.shape
+            I, J, H_k, W_k = param_shape
+            T = H * W     # number of spatial location in an input feature map
+            D = H_k * W_k # number of spatial location in a kernel
+            ones = np.ones(N*T)
+            a_expand = np.zeros((N*T, J*D))
+            for n in range(N):
+              for j in range(J):
+                for h in range(H):
+                  for w in range(W):
+                    for h_k in range(H_k):
+                      for w_k in range(W_k):
+                        t = h*W + w
+                        d = h_k*W_k + w_k
+                        h_ = h+h_k-int(H_k/2)
+                        w_ = w+w_k-int(W_k/2)
+                        if h_ in range(H) and w_ in range(W):
+                          print ('n{0} j{1} h_{2} w_{3}'.format(n,j,h_,w_))
+                          a_expand[t*N + n][j*D + d] = a[n][j][h_][w_]
+            a_expand_plus = np.column_stack((a_expand, ones))
+            A = a_expand_plus.T.dot(a_expand_plus) / N
+
+            N, I, H_, W_ = g.shape
+            T_ = H_ * W_  # number of spatial location in an output feature map
+            g_expand = np.zeros((N*T_, I))
+            for n in range(N):
+              for i in range(I):
+                for h in range(H_):
+                  for w in range(W_):
+                    t = h*W_ + w
+                    g_expand[t*N + n][i] = g[n][i][h][w]
+            G = g_expand.T.dot(g_expand) / N / T_
+            return A, G
+
+        for linkname, (rank, a, g, param_shape) in self.data_dict.items():
             if a.ndim == 2:
-                mz, _ = a.shape
+                A, G = cov_linear(a, g)
             elif a.ndim == 4:
-                _, _, mz, _ = a.shape
+                A, G = cov_conv2d(a, g, param_shape)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     a.shape))
-            ones = np.ones(mz)
-            a_plus = np.column_stack((a, ones))
-            A = a_plus.T.dot(a_plus) / mz
-            G = g.T.dot(g) / mz
             alpha = self.hyperparam.cov_ema_decay
             if linkname in self.cov_ema_dict.keys():
+                # Update EMA of covariance matrices
                 A_ema, G_ema = self.cov_ema_dict[linkname]
                 A_ema = alpha * A + (1 - alpha) * A_ema
                 G_ema = alpha * G + (1 - alpha) * G_ema
@@ -200,6 +247,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = (A, G)
 
     def inv_update(self):
+        print ('inv_update')
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
@@ -208,3 +256,4 @@ class KFAC(chainer.optimizer.GradientMethod):
             A_inv = np.linalg.inv(A_ema + A_dmp)
             G_inv = np.linalg.inv(G_ema + G_dmp)
             self.inv_dict[linkname] = (A_inv, G_inv)
+
