@@ -54,13 +54,15 @@ class DummyVariable(object):
     """
 
     def __init__(self, data):
+        self._check(data)
+        self._data = [data]
+
+    def _check(self, data):
         if (data is not None and
                 not isinstance(data, chainer.get_array_types())):
             msg = '''numpy.ndarray or cuda.ndarray are expected.
 Actual: {0}'''.format(type(data))
             raise TypeError(msg)
-
-        self._data = [data]
 
     @property
     def data(self):
@@ -69,6 +71,11 @@ Actual: {0}'''.format(type(data))
     @property
     def grad(self):
         return self._data[0]
+
+    @grad.setter
+    def grad(self, data):
+        self._check(data)
+        self.grad = data
 
 
 def _kfac_backward(link, backward_main):
