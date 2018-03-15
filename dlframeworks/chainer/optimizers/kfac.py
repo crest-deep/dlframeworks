@@ -192,13 +192,14 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
 class KFAC(chainer.optimizer.GradientMethod):
 
-    def __init__(self, communicator=None, debug=False,
+    def __init__(self, communicator=None, inv_server=False,
                  lr=_default_hyperparam.lr,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
                  damping=_default_hyperparam.damping):
         super(KFAC, self).__init__()
         self.communicator = communicator
+        self.inv_server = inv_server
         self.hyperparam.lr = lr
         self.hyperparam.cov_ema_decay = cov_ema_decay
         self.hyperparam.inv_freq = inv_freq
@@ -230,6 +231,27 @@ class KFAC(chainer.optimizer.GradientMethod):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
+        if self.inv_server:
+            comm = self.communicator
+            if comm is not None and hasattr(comm, 'is_master'):
+                if comm.is_master:
+                    self.recv_cov_ema()
+                    self.inv_update()
+                    self.send_inv()
+                else:
+                    if self.t % self.hyperparam.inv_freq and self.t > 0:
+                        self.send_cov_ema()
+                        self.recv_inv()
+                    else:
+                        self.update_main(lossfun, *args, **kwds)
+                        self.cov_ema_update()
+        else:
+            self.update_main(lossfun, *args, **kwds)
+            self.cov_ema_update()
+            if self.t % self.hyperparam.inv_freq and self.t > 0:
+                self.inv_update()
+
+    def update_main(self, lossfun=None, *args, **kwds):
         update_time = time.time()
         if lossfun is not None:
             self.times['start'] = time.time()
@@ -338,9 +360,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
         self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
+
     def inv_update(self):
-        if not (self.t % self.hyperparam.inv_freq and self.t > 0):
-            return
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)

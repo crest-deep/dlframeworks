@@ -16,21 +16,4 @@ class KFACUpdater(training.updaters.StandardUpdater):
             converter=converter,
             device=device,
             loss_func=loss_func,
-            loss_scale=loss_scale,
-        )
-
-    def update_core(self):
-        batch = self._iterators['main'].next()
-        in_arrays = self.converter(batch, self.device)
-
-        optimizer = self._optimizers['main']
-        loss_func = self.loss_func or optimizer.target
-
-        if isinstance(in_arrays, tuple):
-            optimizer.update(loss_func, *in_arrays)
-        elif isinstance(in_arrays, dict):
-            optimizer.update(loss_func, **in_arrays)
-        else:
-            optimizer.update(loss_func, in_arrays)
-        optimizer.cov_ema_update()
-        optimizer.inv_update()
+            loss_scale=loss_scale)
