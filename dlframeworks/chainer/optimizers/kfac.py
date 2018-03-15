@@ -81,7 +81,6 @@ Actual: {0}'''.format(type(data))
 
 # TODO CPU/GPU impl
 def _cov_linear(a, g):
-    print('cov_linear')
     N, _ = a.shape
     ones = np.ones(N)
     a_plus = np.column_stack((a, ones))
@@ -91,7 +90,6 @@ def _cov_linear(a, g):
 
 # TODO CPU/GPU impl
 def _cov_conv2d(a, g, param_shape):
-    print('cov_conv2d')
     N, J, H, W = a.shape
     I, J, H_k, W_k = param_shape
     T = H * W     # number of spatial location in an input feature map
@@ -213,7 +211,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
-        print ('update')
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -283,8 +280,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             param.update()
 
     def cov_ema_update(self):
-        print ('cov_ema_update')
-
         for linkname in self.ranks_dict.keys():
             acts = self.acts_dict[linkname]
             grads = self.grads_dict[linkname]
@@ -306,7 +301,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = (A, G)
 
     def inv_update(self):
-        print ('inv_update')
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
