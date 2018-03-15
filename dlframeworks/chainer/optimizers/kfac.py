@@ -1,7 +1,9 @@
 import chainer
 from chainer import optimizer
 from chainer.backends import cuda
+from collections import OrderedDict
 import numpy as np
+import time
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
@@ -157,9 +159,13 @@ def _kfac_backward(link, backward_main):
                 (acts, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
                 assert linkname is not None, 'linkname cannot be None.'
-                acts_dict[linkname] = acts.data  # numpy or cupy
-                grads_dict[linkname] = grads.data  # numpy or cupy
+                acts_dict[linkname] = acts.data    # numpy or cupy .ndarray
+                grads_dict[linkname] = grads.data  # numpy or cupy .ndarray
                 ranks_dict[linkname] = creator_node.rank
+    # Must be sorted by its key to communicate between processes
+    acts_dict = OrderedDict(sorted(acts_dict.items(), key=lambda t: t[0]))
+    grads_dict = OrderedDict(sorted(grads_dict.items(), key=lambda t: t[0]))
+    ranks_dict = OrderedDict(sorted(ranks_dict.items(), key=lambda t: t[0]))
     return acts_dict, grads_dict, ranks_dict
 
 
@@ -186,7 +192,7 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
 class KFAC(chainer.optimizer.GradientMethod):
 
-    def __init__(self, communicator=None,
+    def __init__(self, communicator=None, debug=False,
                  lr=_default_hyperparam.lr,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
@@ -199,11 +205,24 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.damping = damping
 
         self.target_params = []
-        self.acts_dict = {}
-        self.grads_dict = {}
-        self.ranks_dict = {}
+        self.acts_dict = None
+        self.grads_dict = None
+        self.ranks_dict = None
         self.cov_ema_dict = {}
         self.inv_dict = {}
+
+        self._require_communication = False
+        if communicator is not None:
+            if communicator.size > 1:
+                self._require_communication = True
+
+        self.times = {}
+        self.times['forward'] = 0
+        self.times['backward'] = 0
+        self.times['comm_grad'] = 0
+        self.times['calc_kfgrad'] = 0
+        self.times['update_time'] = 0
+        self.times['cov_ema_update_time'] = 0
 
     lr = optimizer.HyperparameterProxy('lr')
 
@@ -211,9 +230,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
+        update_time = time.time()
         if lossfun is not None:
+            self.times['start'] = time.time()
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
+            self.times['forward'] += time.time() - self.times['start']
             if use_cleargrads:
                 self.target.cleargrads()
             else:
@@ -223,12 +245,15 @@ class KFAC(chainer.optimizer.GradientMethod):
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
 
+            self.times['start'] = time.time()
             self.acts_dict, self.grads_dict, self.ranks_dict = \
                 _kfac_backward(self.target, backward_main)
             del loss  # No more backward computation, free memory
+            self.times['backward'] += time.time() - self.times['start']
 
+            self.times['start'] = time.time()
             # ======== communication ========
-            if self.communicator is not None:
+            if self._require_communication:
                 target = self.target
                 if self.is_changed(target):
                     # NN changed from previous iteration, must unify weights
@@ -238,6 +263,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 # Sumup all gradients, activations, and gs
                 self.communicator.allreduce_grad(target)
             # ===============================
+            self.times['comm_grad'] += time.time() - self.times['start']
 
             def get_param(path):
                 for _name, _param in self.target.namedparams():
@@ -245,6 +271,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
+            self.times['start'] = time.time()
             for linkname in self.ranks_dict.keys():
                 if linkname in self.inv_dict.keys():
                     param_W = get_param(linkname + '/W')
@@ -264,6 +291,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                         param_b.kfgrad = kfgrads[:, -1]
                     else:
                         param_W.kfgrad = kfgrads
+            self.times['calc_kfgrad'] += time.time() - self.times['start']
 
         self.reallocate_cleared_grads()
 
@@ -273,7 +301,10 @@ class KFAC(chainer.optimizer.GradientMethod):
         for param in self.target.params():
             param.update()
 
+        self.times['update_time'] += time.time() - update_time
+
     def cov_ema_update(self):
+        cov_ema_update_time = time.time()
         for linkname in self.ranks_dict.keys():
             acts = self.acts_dict[linkname]
             grads = self.grads_dict[linkname]
@@ -286,7 +317,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                     acts.shape))
 
             # ======== communication ========
-            if self.communicator is not None:
+            if self._require_communication:
                 A_link = DummyLink(A)
                 G_link = DummyLink(G)
                 self.communicator.allreduce_grad(A_link)
@@ -304,6 +335,8 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = (A_ema, G_ema)
             else:
                 self.cov_ema_dict[linkname] = (A, G)
+
+        self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
     def inv_update(self):
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
