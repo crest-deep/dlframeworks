@@ -11,6 +11,55 @@ _default_hyperparam.inv_freq = 20
 _default_hyperparam.damping = 0.001
 
 
+def cov_linear(a, g):
+    # TODO CPU/GPU impl
+    print('cov_linear')
+    N, _ = a.shape
+    ones = np.ones(N)
+    a_plus = np.column_stack((a, ones))
+    A = a_plus.T.dot(a_plus) / N
+    G = g.T.dot(g) / N
+    return A, G
+
+
+def cov_conv2d(a, g, param_shape):
+    # TODO CPU/GPU impl
+    print('cov_conv2d')
+    N, J, H, W = a.shape
+    I, J, H_k, W_k = param_shape
+    T = H * W     # number of spatial location in an input feature map
+    D = H_k * W_k # number of spatial location in a kernel
+    ones = np.ones(N*T)
+    a_expand = np.zeros((N*T, J*D))
+    for n in range(N):
+      for j in range(J):
+        for h in range(H):
+          for w in range(W):
+            for h_k in range(H_k):
+              for w_k in range(W_k):
+                t = h*W + w
+                d = h_k*W_k + w_k
+                h_ = h+h_k-int(H_k/2)
+                w_ = w+w_k-int(W_k/2)
+                if h_ in range(H) and w_ in range(W):
+                  print ('n{0} j{1} h_{2} w_{3}'.format(n,j,h_,w_))
+                  a_expand[t*N + n][j*D + d] = a[n][j][h_][w_]
+    a_expand_plus = np.column_stack((a_expand, ones))
+    A = a_expand_plus.T.dot(a_expand_plus) / N
+
+    N, I, H_, W_ = g.shape
+    T_ = H_ * W_  # number of spatial location in an output feature map
+    g_expand = np.zeros((N*T_, I))
+    for n in range(N):
+      for i in range(I):
+        for h in range(H_):
+          for w in range(W_):
+            t = h*W_ + w
+            g_expand[t*N + n][i] = g[n][i][h][w]
+    G = g_expand.T.dot(g_expand) / N / T_
+    return A, G
+
+
 class DummyLink(object):
     """A dummy link that only has ``namedparams()`` function.
 
@@ -239,52 +288,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def cov_ema_update(self):
         print ('cov_ema_update')
-        # TODO CPU/GPU impl
-        def cov_linear(a, g):
-            print('cov_linear')
-            N, _ = a.shape
-            ones = np.ones(N)
-            a_plus = np.column_stack((a, ones))
-            A = a_plus.T.dot(a_plus) / N
-            G = g.T.dot(g) / N
-            return A, G
-
-        # TODO CPU/GPU impl
-        def cov_conv2d(a, g, param_shape):
-            print('cov_conv2d')
-            N, J, H, W = a.shape
-            I, J, H_k, W_k = param_shape
-            T = H * W     # number of spatial location in an input feature map
-            D = H_k * W_k # number of spatial location in a kernel
-            ones = np.ones(N*T)
-            a_expand = np.zeros((N*T, J*D))
-            for n in range(N):
-              for j in range(J):
-                for h in range(H):
-                  for w in range(W):
-                    for h_k in range(H_k):
-                      for w_k in range(W_k):
-                        t = h*W + w
-                        d = h_k*W_k + w_k
-                        h_ = h+h_k-int(H_k/2)
-                        w_ = w+w_k-int(W_k/2)
-                        if h_ in range(H) and w_ in range(W):
-                          print ('n{0} j{1} h_{2} w_{3}'.format(n,j,h_,w_))
-                          a_expand[t*N + n][j*D + d] = a[n][j][h_][w_]
-            a_expand_plus = np.column_stack((a_expand, ones))
-            A = a_expand_plus.T.dot(a_expand_plus) / N
-
-            N, I, H_, W_ = g.shape
-            T_ = H_ * W_  # number of spatial location in an output feature map
-            g_expand = np.zeros((N*T_, I))
-            for n in range(N):
-              for i in range(I):
-                for h in range(H_):
-                  for w in range(W_):
-                    t = h*W_ + w
-                    g_expand[t*N + n][i] = g[n][i][h][w]
-            G = g_expand.T.dot(g_expand) / N / T_
-            return A, G
 
         for linkname in self.ranks_dict.keys():
             acts = self.acts_dict[linkname]
