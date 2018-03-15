@@ -283,9 +283,9 @@ class KFAC(chainer.optimizer.GradientMethod):
             acts = self.acts_dict[linkname]
             grads = self.grads_dict[linkname]
             if acts.ndim == 2:
-                A, G = cov_linear(acts, grads)
+                A, G = _cov_linear(acts, grads)
             elif acts.ndim == 4:
-                A, G = cov_conv2d(acts, grads, param_shape)
+                A, G = _cov_conv2d(acts, grads, param_shape)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
