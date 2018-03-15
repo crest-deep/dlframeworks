@@ -33,6 +33,4 @@ class KFACUpdater(training.updaters.StandardUpdater):
         else:
             optimizer.update(loss_func, in_arrays)
         optimizer.cov_ema_update()
-        if self.iteration % optimizer.hyperparam.inv_freq == 0 and \
-                self.iteration > 0:
-            optimizer.inv_update()
+        optimizer.inv_update()

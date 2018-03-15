@@ -339,6 +339,8 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
     def inv_update(self):
+        if not (self.t % self.hyperparam.inv_freq and self.t > 0):
+            return
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
