@@ -80,17 +80,16 @@ Actual: {0}'''.format(type(data))
         self.grad = data
 
 # TODO CPU/GPU impl
-def _cov_linear(a, g):
-    N, _ = a.shape
-    ones = np.ones(N)
-    a_plus = np.column_stack((a, ones))
-    A = a_plus.T.dot(a_plus) / N
-    G = g.T.dot(g) / N
+def _cov_linear(acts, grads):
+    n, _ = acts.shape
+    ones = np.ones(n)
+    acts_plus = np.column_stack((acts, ones))
+    A = acts_plus.T.dot(acts_plus) / n
+    G = grads.T.dot(grads) / n
     return A, G
 
 # TODO CPU/GPU impl
 def _cov_conv2d(a, g, param_shape):
-    N, J, H, W = a.shape
     I, J, H_k, W_k = param_shape
     T = H * W     # number of spatial location in an input feature map
     D = H_k * W_k # number of spatial location in a kernel
