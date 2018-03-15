@@ -10,6 +10,14 @@ _default_hyperparam.inv_freq = 20
 _default_hyperparam.damping = 0.001
 
 
+def _check_type(data):
+    if (data is not None and
+            not isinstance(data, chainer.get_array_types())):
+        msg = '''numpy.ndarray or cuda.ndarray are expected.
+Actual: {0}'''.format(type(data))
+        raise TypeError(msg)
+
+
 def cov_linear(a, g):
     # TODO CPU/GPU impl
     print('cov_linear')
@@ -79,20 +87,16 @@ class DummyLink(object):
 
     """
 
-    def __init__(self, arr):
+    def __init__(self, data):
         self._params = {}
-        for name, data in arr.items():
-            self._params[name] = DummyVariable(data)
+        self._params['/'] = DummyVariable(data)
 
     def namedparams(self):
         for name, param in self._params.items():
             yield name, param
 
     def unpack(self):
-        arr = {}
-        for name, param in self._params.items():
-            arr[name] = param.data
-        return arr
+        return self._params['/']
 
 
 class DummyVariable(object):
@@ -104,15 +108,8 @@ class DummyVariable(object):
     """
 
     def __init__(self, data):
-        self._check(data)
+        _check_type(data)
         self._data = [data]
-
-    def _check(self, data):
-        if (data is not None and
-                not isinstance(data, chainer.get_array_types())):
-            msg = '''numpy.ndarray or cuda.ndarray are expected.
-Actual: {0}'''.format(type(data))
-            raise TypeError(msg)
 
     @property
     def data(self):
@@ -124,8 +121,8 @@ Actual: {0}'''.format(type(data))
 
     @grad.setter
     def grad(self, data):
-        self._check(data)
-        self.grad = data
+        _check_type(data)
+        self._data[0] = data
 
 
 def _kfac_backward(link, backward_main):
@@ -236,8 +233,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             # ======== communication ========
             if self.communicator is not None:
                 target = self.target
-                a_s_link = DummyLink(self.acts_dict)
-                g_s_link = DummyLink(self.grads_dict)
                 if self.is_changed(target):
                     # NN changed from previous iteration, must unify weights
                     # within all processes
@@ -245,10 +240,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                     return
                 # Sumup all gradients, activations, and gs
                 self.communicator.allreduce_grad(target)
-                self.communicator.allreduce_grad(a_s_link)
-                self.communicator.allreduce_grad(g_s_link)
-                self.acts_dict = a_s_link.unpack()
-                self.grads_dict = g_s_link.unpack()
             # ===============================
 
             def get_param(path):
@@ -294,10 +285,21 @@ class KFAC(chainer.optimizer.GradientMethod):
             if acts.ndim == 2:
                 A, G = cov_linear(acts, grads)
             elif acts.ndim == 4:
-                A, G = cov_conv2d(acts, grads, param_shape)
+                A, G = cov_conv2d(acts, grads, None)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
+
+            # ======== communication ========
+            if self.communicator is not None:
+                A_link = DummyLink(A)
+                G_link = DummyLink(G)
+                self.communicator.allreduce_grad(A_link)
+                self.communicator.allreduce_grad(G_link)
+                A = A_link.unpack()
+                G = G_link.unpack()
+            # ===============================
+
             alpha = self.hyperparam.cov_ema_decay
             if linkname in self.cov_ema_dict.keys():
                 # Update EMA of covariance matrices
@@ -309,7 +311,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = (A, G)
 
     def inv_update(self):
-        print ('inv_update')
+        print('inv_update')
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
