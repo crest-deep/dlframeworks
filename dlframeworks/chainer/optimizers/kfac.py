@@ -2,8 +2,6 @@ import chainer
 from chainer import training
 from chainer import optimizer
 from chainer.backends import cuda
-from chainer.dataset import convert
-from collections import OrderedDict
 import numpy as np
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
@@ -13,18 +11,87 @@ _default_hyperparam.inv_freq = 20
 _default_hyperparam.damping = 0.001
 
 
-def _kfac_backward(link, backward_main, retain_grad=True,
-                   enable_double_backprop=False, loss_scale=None):
-    """Backward function for KFAC optimizer.
+class DummyLink(object):
+    """A dummy link that only has ``namedparams()`` function.
 
-    This function is invoked from ``KFAC.update()`` to caculate the gradients.
-    KFAC needs the inputs and gradients per layer, and Chainer does not let us
-    get these objects directly from the API.
+    Since ChainerMN uses origianal communicators and those communicators only
+    defines ``send``, ``recv``, ``alltoall``, ``broadcast_data``, and
+    ``allreduce_grad``, we cannot use common ``MPI_Allreduce`` to reduce the
+    data (unless we are using ChainerMN communicator). To address this problem,
+    we will define a wrapper object that behaves like a ``chainer.Link``.
+
+    In the communication functinos of ChainerMN communicators (e.g.
+    ``hierarchical_communicator``), they invoke ``extrac_params(model)`` to get
+    the list of ``chainer.Parameter`` objects (``model`` is passed from
+    ``allreduce_grad(model)``, defined in
+    ``chainermn/communicators/_memory_utility.py``). There is no other access
+    to the ``model`` argument, and it means we can replace this argument to a
+    non-``chainer.Link`` object if we can handle all attribution access to the
+    ``model``.
 
     """
-    with chainer.using_config('enable_backprop', enable_double_backprop):
-        # To obtain grads, we need to edit the origianl file (`variable.py`)
-        grads = backward_main(retain_grad, loss_scale)
+
+    def __init__(self, arr):
+        self._params = {}
+        for name, data in arr.items():
+            self._params[name] = DummyVariable(data)
+
+    def namedparams(self):
+        for name, param in self._params.items():
+            yield name, param
+
+    def unpack(self):
+        arr = {}
+        for name, param in self._params.items():
+            arr[name] = param.data
+        return arr
+
+
+class DummyVariable(object):
+    """A dummy variable that returns ``data`` at ``grad``.
+
+    Similar to ``DummyLink``, this class is a wrapper class the behaves like
+    ``chainer.Variable``.
+
+    """
+
+    def __init__(self, data):
+        self._check(data)
+        self._data = [data]
+
+    def _check(self, data):
+        if (data is not None and
+                not isinstance(data, chainer.get_array_types())):
+            msg = '''numpy.ndarray or cuda.ndarray are expected.
+Actual: {0}'''.format(type(data))
+            raise TypeError(msg)
+
+    @property
+    def data(self):
+        return self._data[0]
+
+    @property
+    def grad(self):
+        return self._data[0]
+
+    @grad.setter
+    def grad(self, data):
+        self._check(data)
+        self.grad = data
+
+
+def _kfac_backward(link, backward_main):
+    """Backward function for KFAC optimizer.
+
+    This function is invoked from ``KFAC.update()`` to:
+        1. calculate backprop
+        2. obtain a (activations)
+        3. obtain g (gradients of activation's input).
+
+    """
+    with chainer.using_config('enable_backprop', False):
+        # To obtain grads, we need to edit a file ``variable.py``
+        grads = backward_main(retain_grad=True, loss_scale=None)
 
     namedparams = list(link.namedparams())
 
@@ -36,53 +103,21 @@ def _kfac_backward(link, backward_main, retain_grad=True,
                 return _name[:_name.rfind('/')]
         return None
 
-    data = {}
-    for node, grad in grads.items():
+    a_s = {}
+    g_s = {}
+    ranks = {}
+    for node, g in grads.items():
         creator_node = node.creator_node  # parent function node
         if creator_node is not None:  # ignore leaf node
             if isinstance(creator_node, chainer.functions.connection.linear.LinearFunction) \
               or isinstance(creator_node, chainer.functions.connection.convolution_2d.Convolution2DFunction):
                 (a, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
-                assert linkname is not None, 'linkname cannot be None.'
-                data[linkname] = (creator_node.rank, a.data, grad.data, param.data.shape)
-    # Sort by its rank
-    data = OrderedDict(sorted(data.items(), key=lambda x: x[1][0]))
-    return data
-
-
-class KFACUpdater(training.updaters.StandardUpdater):
-
-    def __init__(self, iterator, optimizer, converter=convert.concat_examples,
-                 models=None, device=None, loss_func=None, loss_scale=None):
-        assert isinstance(optimizer, KFAC), \
-            'The optimizer has to be an instance of KFAC.'
-        super(KFACUpdater, self).__init__(
-            iterator=iterator,
-            optimizer=optimizer,
-            converter=converter,
-            device=device,
-            loss_func=loss_func,
-            loss_scale=loss_scale,
-        )
-
-    def update_core(self):
-        batch = self._iterators['main'].next()
-        in_arrays = self.converter(batch, self.device)
-
-        optimizer = self._optimizers['main']
-        loss_func = self.loss_func or optimizer.target
-
-        if isinstance(in_arrays, tuple):
-            optimizer.update(loss_func, *in_arrays)
-        elif isinstance(in_arrays, dict):
-            optimizer.update(loss_func, **in_arrays)
-        else:
-            optimizer.update(loss_func, in_arrays)
-        optimizer.cov_ema_update()
-        if self.iteration % optimizer.hyperparam.inv_freq == 0 and \
-                self.iteration > 0:
-            optimizer.inv_update()
+                assert linkname is not None, 'linkname cannot be None.' 
+                a_s[linkname] = a.data  # numpy or cupy
+                g_s[linkname] = g.data  # numpy or cupy
+                ranks[linkname] = creator_node.rank
+    return a_s, g_s, ranks
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -108,18 +143,22 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
 class KFAC(chainer.optimizer.GradientMethod):
 
-    def __init__(self,
+    def __init__(self, communicator=None,
                  lr=_default_hyperparam.lr,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
                  damping=_default_hyperparam.damping):
         super(KFAC, self).__init__()
+        self.communicator = communicator
         self.hyperparam.lr = lr
         self.hyperparam.cov_ema_decay = cov_ema_decay
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
-        self.data_dict = {}
+        self.target_params = []
+        self.a_s = {}
+        self.g_s = {}
+        self.ranks = {}
         self.cov_ema_dict = {}
         self.inv_dict = {}
 
@@ -137,12 +176,32 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.target.cleargrads()
             else:
                 self.target.zerograds()
-            # We will comment ``loss.backward()`` and call custom backward
-            # function to enable KFAC.
-            # loss.backward(loss_scale=self._loss_scale)
+            # We will remove ``loss.backward()`` from here.
+            # Do backprop, and obtain ``grads`` which contains the dependency
+            # graph inside.
             backward_main = getattr(loss, '_backward_main')
-            self.data_dict = _kfac_backward(self.target, backward_main)
-            del loss
+
+            self.a_s, self.g_s, self.ranks = \
+                _kfac_backward(self.target, backward_main)
+            del loss  # No more backward computation, free memory
+
+            # ======== communication ========
+            if self.communicator is not None:
+                target = self.target
+                a_s_link = DummyLink(self.a_s)
+                g_s_link = DummyLink(self.g_s)
+                if self.is_changed(target):
+                    # NN changed from previous iteration, must unify weights
+                    # within all processes
+                    self.communicator.broadcast_data(target)
+                    return
+                # Sumup all gradients, activations, and gs
+                self.communicator.allreduce_grad(target)
+                self.communicator.allreduce_grad(a_s_link)
+                self.communicator.allreduce_grad(g_s_link)
+                self.a_s = a_s_link.unpack()
+                self.g_s = g_s_link.unpack()
+            # ===============================
 
             def get_param(path):
                 for _name, _param in self.target.namedparams():
@@ -150,7 +209,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
-            for linkname in self.data_dict.keys():
+            for linkname in self.ranks.keys():
                 if linkname in self.inv_dict.keys():
                     param_W = get_param(linkname + '/W')
                     param_b = get_param(linkname + '/b')
@@ -169,7 +228,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                         param_b.kfgrad = kfgrads[:, -1]
                     else:
                         param_W.kfgrad = kfgrads
-            # ================================
 
         self.reallocate_cleared_grads()
 
@@ -228,7 +286,9 @@ class KFAC(chainer.optimizer.GradientMethod):
             G = g_expand.T.dot(g_expand) / N / T_
             return A, G
 
-        for linkname, (rank, a, g, param_shape) in self.data_dict.items():
+        for linkname in self.ranks.keys():
+            a = self.a_s[linkname]
+            g = self.g_s[linkname]
             if a.ndim == 2:
                 A, G = cov_linear(a, g)
             elif a.ndim == 4:
@@ -257,3 +317,14 @@ class KFAC(chainer.optimizer.GradientMethod):
             G_inv = np.linalg.inv(G_ema + G_dmp)
             self.inv_dict[linkname] = (A_inv, G_inv)
 
+    def is_changed(self, target):
+        previous_params = self.target_params
+        self.target_params = [(name, param.data is not None)
+                              for name, param in sorted(target.namedparams())]
+        if len(previous_params) != len(self.target_params):
+            return True
+
+        for param1, param2 in zip(self.target_params, previous_params):
+            if (param1[0] != param2[0]) or param1[1] != param2[1]:
+                return True
+        return False

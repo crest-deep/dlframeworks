@@ -70,6 +70,8 @@ class AsymCommunicator(object):
         super(AsymCommunicator, self).__setattr__(
             'mpi_intercomm_root', mpi_intercomm_root)
         super(AsymCommunicator, self).__setattr__(
+            'is_master', is_masters[rank])
+        super(AsymCommunicator, self).__setattr__(
             'actual_comm', actual_comm)
 
     def __getattr__(self, name):
