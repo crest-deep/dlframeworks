@@ -1,5 +1,4 @@
 import chainer
-from chainer import training
 from chainer import optimizer
 from chainer.backends import cuda
 import numpy as np
@@ -27,23 +26,23 @@ def cov_conv2d(a, g, param_shape):
     print('cov_conv2d')
     N, J, H, W = a.shape
     I, J, H_k, W_k = param_shape
-    T = H * W     # number of spatial location in an input feature map
-    D = H_k * W_k # number of spatial location in a kernel
+    T = H * W      # number of spatial location in an input feature map
+    D = H_k * W_k  # number of spatial location in a kernel
     ones = np.ones(N*T)
     a_expand = np.zeros((N*T, J*D))
     for n in range(N):
-      for j in range(J):
-        for h in range(H):
-          for w in range(W):
-            for h_k in range(H_k):
-              for w_k in range(W_k):
-                t = h*W + w
-                d = h_k*W_k + w_k
-                h_ = h+h_k-int(H_k/2)
-                w_ = w+w_k-int(W_k/2)
-                if h_ in range(H) and w_ in range(W):
-                  print ('n{0} j{1} h_{2} w_{3}'.format(n,j,h_,w_))
-                  a_expand[t*N + n][j*D + d] = a[n][j][h_][w_]
+        for j in range(J):
+            for h in range(H):
+                for w in range(W):
+                    for h_k in range(H_k):
+                        for w_k in range(W_k):
+                            t = h*W + w
+                            d = h_k*W_k + w_k
+                            h_ = h+h_k-int(H_k/2)
+                            w_ = w+w_k-int(W_k/2)
+                            if h_ in range(H) and w_ in range(W):
+                                print('n{0} j{1} h_{2} w_{3}'.format(n, j, h_, w_))
+                                a_expand[t*N + n][j*D + d] = a[n][j][h_][w_]
     a_expand_plus = np.column_stack((a_expand, ones))
     A = a_expand_plus.T.dot(a_expand_plus) / N
 
@@ -51,11 +50,11 @@ def cov_conv2d(a, g, param_shape):
     T_ = H_ * W_  # number of spatial location in an output feature map
     g_expand = np.zeros((N*T_, I))
     for n in range(N):
-      for i in range(I):
-        for h in range(H_):
-          for w in range(W_):
-            t = h*W_ + w
-            g_expand[t*N + n][i] = g[n][i][h][w]
+        for i in range(I):
+            for h in range(H_):
+                for w in range(W_):
+                    t = h*W_ + w
+                    g_expand[t*N + n][i] = g[n][i][h][w]
     G = g_expand.T.dot(g_expand) / N / T_
     return A, G
 
@@ -162,7 +161,7 @@ def _kfac_backward(link, backward_main):
               or isinstance(creator_node, chainer.functions.connection.convolution_2d.Convolution2DFunction):
                 (acts, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
-                assert linkname is not None, 'linkname cannot be None.' 
+                assert linkname is not None, 'linkname cannot be None.'
                 acts_dict[linkname] = acts.data  # numpy or cupy
                 grads_dict[linkname] = grads.data  # numpy or cupy
                 ranks_dict[linkname] = creator_node.rank
@@ -217,7 +216,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
-        print ('update')
+        print('update')
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -287,7 +286,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             param.update()
 
     def cov_ema_update(self):
-        print ('cov_ema_update')
+        print('cov_ema_update')
 
         for linkname in self.ranks_dict.keys():
             acts = self.acts_dict[linkname]
