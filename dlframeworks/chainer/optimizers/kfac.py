@@ -103,21 +103,21 @@ def _kfac_backward(link, backward_main):
                 return _name[:_name.rfind('/')]
         return None
 
-    a_s = {}
-    g_s = {}
+    acts_dict = {}
+    grads_dict = {}
     ranks = {}
-    for node, g in grads.items():
+    for node, grads in grads.items():
         creator_node = node.creator_node  # parent function node
         if creator_node is not None:  # ignore leaf node
             if isinstance(creator_node, chainer.functions.connection.linear.LinearFunction) \
               or isinstance(creator_node, chainer.functions.connection.convolution_2d.Convolution2DFunction):
-                (a, param) = creator_node.get_retained_inputs()
+                (acts, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
                 assert linkname is not None, 'linkname cannot be None.' 
-                a_s[linkname] = a.data  # numpy or cupy
-                g_s[linkname] = g.data  # numpy or cupy
+                acts_dict[linkname] = acts.data  # numpy or cupy
+                grads_dict[linkname] = grads.data  # numpy or cupy
                 ranks[linkname] = creator_node.rank
-    return a_s, g_s, ranks
+    return acts_dict, grads_dict, ranks
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -156,8 +156,8 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.damping = damping
 
         self.target_params = []
-        self.a_s = {}
-        self.g_s = {}
+        self.acts_dict = {}
+        self.grads_dict = {}
         self.ranks = {}
         self.cov_ema_dict = {}
         self.inv_dict = {}
@@ -181,15 +181,15 @@ class KFAC(chainer.optimizer.GradientMethod):
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
 
-            self.a_s, self.g_s, self.ranks = \
+            self.acts_dict, self.grads_dict, self.ranks = \
                 _kfac_backward(self.target, backward_main)
             del loss  # No more backward computation, free memory
 
             # ======== communication ========
             if self.communicator is not None:
                 target = self.target
-                a_s_link = DummyLink(self.a_s)
-                g_s_link = DummyLink(self.g_s)
+                a_s_link = DummyLink(self.acts_dict)
+                g_s_link = DummyLink(self.grads_dict)
                 if self.is_changed(target):
                     # NN changed from previous iteration, must unify weights
                     # within all processes
@@ -199,8 +199,8 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.communicator.allreduce_grad(target)
                 self.communicator.allreduce_grad(a_s_link)
                 self.communicator.allreduce_grad(g_s_link)
-                self.a_s = a_s_link.unpack()
-                self.g_s = g_s_link.unpack()
+                self.acts_dict = a_s_link.unpack()
+                self.grads_dict = g_s_link.unpack()
             # ===============================
 
             def get_param(path):
@@ -287,15 +287,15 @@ class KFAC(chainer.optimizer.GradientMethod):
             return A, G
 
         for linkname in self.ranks.keys():
-            a = self.a_s[linkname]
-            g = self.g_s[linkname]
-            if a.ndim == 2:
-                A, G = cov_linear(a, g)
-            elif a.ndim == 4:
-                A, G = cov_conv2d(a, g, param_shape)
+            acts = self.acts_dict[linkname]
+            grads = self.grads_dict[linkname]
+            if acts.ndim == 2:
+                A, G = cov_linear(acts, grads)
+            elif acts.ndim == 4:
+                A, G = cov_conv2d(acts, grads, param_shape)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
-                    a.shape))
+                    acts.shape))
             alpha = self.hyperparam.cov_ema_decay
             if linkname in self.cov_ema_dict.keys():
                 # Update EMA of covariance matrices
