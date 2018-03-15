@@ -221,21 +221,21 @@ class KFAC(chainer.optimizer.GradientMethod):
             del loss  # No more backward computation, free memory
 
             # ======== communication ========
-#            if self.communicator is not None:
-#                target = self.target
-#                a_s_link = DummyLink(self.acts_dict)
-#                g_s_link = DummyLink(self.grads_dict)
-#                if self.is_changed(target):
-#                    # NN changed from previous iteration, must unify weights
-#                    # within all processes
-#                    self.communicator.broadcast_data(target)
-#                    return
-#                # Sumup all gradients, activations, and gs
-#                self.communicator.allreduce_grad(target)
-#                self.communicator.allreduce_grad(a_s_link)
-#                self.communicator.allreduce_grad(g_s_link)
-#                self.acts_dict = a_s_link.unpack()
-#                self.grads_dict = g_s_link.unpack()
+            if self.communicator is not None:
+                target = self.target
+                a_s_link = DummyLink(self.acts_dict)
+                g_s_link = DummyLink(self.grads_dict)
+                if self.is_changed(target):
+                    # NN changed from previous iteration, must unify weights
+                    # within all processes
+                    self.communicator.broadcast_data(target)
+                    return
+                # Sumup all gradients, activations, and gs
+                self.communicator.allreduce_grad(target)
+                self.communicator.allreduce_grad(a_s_link)
+                self.communicator.allreduce_grad(g_s_link)
+                self.acts_dict = a_s_link.unpack()
+                self.grads_dict = g_s_link.unpack()
             # ===============================
 
             def get_param(path):
