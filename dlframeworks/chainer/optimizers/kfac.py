@@ -105,7 +105,7 @@ def _kfac_backward(link, backward_main):
 
     acts_dict = {}
     grads_dict = {}
-    ranks = {}
+    ranks_dict = {}
     for node, grads in grads.items():
         creator_node = node.creator_node  # parent function node
         if creator_node is not None:  # ignore leaf node
@@ -116,8 +116,8 @@ def _kfac_backward(link, backward_main):
                 assert linkname is not None, 'linkname cannot be None.' 
                 acts_dict[linkname] = acts.data  # numpy or cupy
                 grads_dict[linkname] = grads.data  # numpy or cupy
-                ranks[linkname] = creator_node.rank
-    return acts_dict, grads_dict, ranks
+                ranks_dict[linkname] = creator_node.rank
+    return acts_dict, grads_dict, ranks_dict
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -158,7 +158,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.target_params = []
         self.acts_dict = {}
         self.grads_dict = {}
-        self.ranks = {}
+        self.ranks_dict = {}
         self.cov_ema_dict = {}
         self.inv_dict = {}
 
@@ -181,7 +181,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
 
-            self.acts_dict, self.grads_dict, self.ranks = \
+            self.acts_dict, self.grads_dict, self.ranks_dict = \
                 _kfac_backward(self.target, backward_main)
             del loss  # No more backward computation, free memory
 
@@ -209,7 +209,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
-            for linkname in self.ranks.keys():
+            for linkname in self.ranks_dict.keys():
                 if linkname in self.inv_dict.keys():
                     param_W = get_param(linkname + '/W')
                     param_b = get_param(linkname + '/b')
@@ -286,7 +286,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             G = g_expand.T.dot(g_expand) / N / T_
             return A, G
 
-        for linkname in self.ranks.keys():
+        for linkname in self.ranks_dict.keys():
             acts = self.acts_dict[linkname]
             grads = self.grads_dict[linkname]
             if acts.ndim == 2:
