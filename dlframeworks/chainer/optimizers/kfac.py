@@ -178,7 +178,8 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
 class KFAC(chainer.optimizer.GradientMethod):
 
-    def __init__(self, communicator=None,
+    def __init__(self, 
+                 communicator=None,
                  lr=_default_hyperparam.lr,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
@@ -300,18 +301,29 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 self.cov_ema_dict[linkname] = (A, G)
 
-    # TODO CPU/GPU impl
     def inv_update(self):
-        for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
-            A_ema = cuda.to_cpu(A_ema)
-            G_ema = cuda.to_cpu(G_ema)
-            A_dmp = np.identity(A_ema.shape[0]) * \
+        for linkname, emas in self.cov_ema_dict.items():
+            self.inv_update_core(linkname, emas)
+
+    def inv_update_core(self, linkname, emas):
+        with cuda.get_device_from_array(emas) as dev:
+            if int(dev) == -1:
+                self.inv_update_core_cpu(linkname, emas)
+            else:
+                self.inv_update_core_gpu(linkname, emas)
+                
+    def inv_update_core_cpu(self, linkname, emas):
+        def inv(ema):
+            dmp = np.identity(ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
-            G_dmp = np.identity(G_ema.shape[0]) * \
-                np.sqrt(self.hyperparam.damping)
-            A_inv = np.linalg.inv(A_ema + A_dmp)
-            G_inv = np.linalg.inv(G_ema + G_dmp)
-            self.inv_dict[linkname] = (A_inv, G_inv)
+            return np.linalg.inv(ema + dmp)
+        invs = (inv(ema) for ema in emas)
+        A_inv, G_inv = invs
+        self.inv_dict[linkname] = invs
+
+    def inv_update_core_gpu(self, linkname, ema):
+        # TODO GPU Impl.
+        raise NotImplementedError
 
     def is_changed(self, target):
         previous_params = self.target_params
