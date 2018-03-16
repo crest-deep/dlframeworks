@@ -18,68 +18,70 @@ def _create_print_mpi(comm):
     return print_mpi
 
 
+def _split(arr, n):
+    N = len(arr)
+    for i in range(n):
+        head = (i * N) // n
+        tail = ((i + 1) * N) // n
+        yield arr[head:tail]
+
+
 class AsymCommunicator(object):
 
     def __init__(self, mpi_comm, communicator_name='hierarchical', ratio=0.2,
                  debug=False):
-        rank = mpi_comm.rank
-        size = mpi_comm.size
         if debug:
             print_mpi = _create_print_mpi(mpi_comm)
-        is_masters = [False for _ in range(size)]
-        for i in range(size):
-            if i < size * 0.2:
-                is_masters[i] = True
 
-        # Create MPI's intra communicator
-        if is_masters[rank]:
-            mpi_intracomm = mpi_comm.Split(color=0, key=rank)
+        worldcomm = chainermn.create_communicator(
+            communicator_name=communicator_name, mpi_comm=mpi_comm)
+
+        # Create worker group
+        if worldcomm.size * ratio >= worldcomm.inter_size:
+            n_masters = worldcomm.inter_size
         else:
-            mpi_intracomm = mpi_comm.Split(color=1, key=rank)
+            n_masters = max(int(worldcomm.size * ratio), 1)
+        nodes = list(range(worldcomm.inter_size))
+        groups = list(_split(nodes, n_masters))
+        is_master = 0
+        for i, group in enumerate(groups):
+            if worldcomm.inter_rank in group:
+                my_group = i
+            if worldcomm.inter_rank == group[0] and worldcomm.intra_rank == 0:
+                is_master = 1
+
+        # Create MPI intra communicator for allreducing gradients
+        intra_comm_a = worldcomm.split(color=is_master, key=worldcomm.rank)
 
         if debug:
-            print_mpi('intra: {}/{}'.format(mpi_intracomm.rank,
-                                            mpi_intracomm.size))
+            print_mpi('intra_a: {}/{}'.format(intra_comm_a.rank,
+                                              intra_comm_a.size))
 
-        # Create MPI's inter communicator
-        local_leader = 0
-        if is_masters[rank]:
-            remote_leader = next(i for i, x in enumerate(is_masters) if not x)
-            mpi_intercomm_root = MPI.ROOT if \
-                mpi_intracomm.rank == local_leader else MPI.PROC_NULL
-        else:
-            remote_leader = next(i for i, x in enumerate(is_masters) if x)
-            mpi_intercomm_root = remote_leader
-        mpi_intercomm = mpi_intracomm.Create_intercomm(
-            local_leader, mpi_comm, remote_leader)
+        # Create MPI intra communicator for broadcasting/collecting activations
+        # and gradients inverse matrices
+        intra_comm_b = worldcomm.split(color=my_group, key=worldcomm.rank)
 
         if debug:
-            print_mpi('inter: {}/{}'.format(mpi_intercomm.rank,
-                                            mpi_intercomm.size))
-            send_buf = 0 if is_masters[rank] else 16
-            recv_buf = mpi_intercomm.reduce(send_buf, root=mpi_intercomm_root)
-            print_mpi('recv_buf: {}'.format(recv_buf))
-
-        actual_comm = chainermn.create_communicator(communicator_name,
-                                                    mpi_comm=mpi_intracomm)
+            print_mpi('intra_b: {}/{}'.format(intra_comm_b.rank,
+                                              intra_comm_b.size))
 
         super(AsymCommunicator, self).__setattr__(
-            'mpi_intracomm', mpi_intracomm)
+            'worldcomm', worldcomm)
         super(AsymCommunicator, self).__setattr__(
-            'mpi_intercomm', mpi_intercomm)
+            'intra_comm_a', intra_comm_a)
         super(AsymCommunicator, self).__setattr__(
-            'mpi_intercomm_root', mpi_intercomm_root)
+            'intra_comm_b', intra_comm_b)
         super(AsymCommunicator, self).__setattr__(
-            'is_master', is_masters[rank])
+            'my_group', my_group)
         super(AsymCommunicator, self).__setattr__(
-            'actual_comm', actual_comm)
+            'is_master', is_master)
 
     def __getattr__(self, name):
-        return getattr(self.actual_comm, name)
+        return getattr(self.intra_comm_a, name)
 
     def __setattr__(self, name, value):
-        setattr(self.actual_comm, name, value)
+        setattr(self.intra_comm_a, name, value)
 
 
 if __name__ == '__main__':
-    comm = AsymCommunicator(MPI.COMM_WORLD, debug=True)
+    comm = AsymCommunicator(MPI.COMM_WORLD, communicator_name='naive', debug=True)
