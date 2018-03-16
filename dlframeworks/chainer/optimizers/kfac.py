@@ -318,7 +318,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 np.sqrt(self.hyperparam.damping)
             return np.linalg.inv(ema + dmp)
         invs = (inv(ema) for ema in emas)
-        A_inv, G_inv = invs
         self.inv_dict[linkname] = invs
 
     def inv_update_core_gpu(self, linkname, ema):
