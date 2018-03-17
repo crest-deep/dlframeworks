@@ -161,7 +161,7 @@ def _kfac_backward(link, backward_main):
                   conv_args_dict[linkname] = ksize, stride, pad
     return acts_dict, grads_dict, ranks_dict, conv_args_dict
 
-def _set_kfac_grad(dev, param_W, param_b, A_inv, G_inv):
+def _kfac_grad(dev, param_W, param_b, A_inv, G_inv):
     grad = param_W.grad
     if param_b is not None:
         if int(dev) == -1:
@@ -283,7 +283,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                             if param_b is not None else \
                               (param_W.data, A_inv, G_inv)
                     with cuda.get_device_from_array(*data) as dev:
-                        _set_kfac_grad(dev, param_W, param_b, A_inv, G_inv)
+                        _kfac_grad(dev, param_W, param_b, A_inv, G_inv)
 
         self.reallocate_cleared_grads()
         self.call_hooks()
