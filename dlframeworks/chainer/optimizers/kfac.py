@@ -270,20 +270,17 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
-            for linkname in self.ranks_dict.keys():
-                if linkname in self.inv_dict.keys():
-                    param_W = get_param(linkname + '/W')
-                    param_b = get_param(linkname + '/b')
-                    if param_W is None:
-                        # Some links has empty b param, only return if W is
-                        # None.
-                        return
-                    A_inv, G_inv = self.inv_dict[linkname]
-                    data = (param_W.data, param_b.data, A_inv, G_inv) \
-                            if param_b is not None else \
-                              (param_W.data, A_inv, G_inv)
-                    with cuda.get_device_from_array(*data) as dev:
-                        _kfac_grad(dev, param_W, param_b, A_inv, G_inv)
+            for linkname in self.inv_dict.keys():
+                param_W = get_param(linkname + '/W')
+                param_b = get_param(linkname + '/b')
+                # Some links has empty b param
+                assert param_W is not None
+                A_inv, G_inv = self.inv_dict[linkname]
+                data = (param_W.data, param_b.data, A_inv, G_inv) \
+                    if param_b is not None else \
+                      (param_W.data, A_inv, G_inv)
+                with cuda.get_device_from_array(*data) as dev:
+                    _kfac_grad(dev, param_W, param_b, A_inv, G_inv)
 
         self.reallocate_cleared_grads()
         self.call_hooks()
