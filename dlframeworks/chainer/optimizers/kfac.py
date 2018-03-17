@@ -173,7 +173,7 @@ def _set_kfac_grad(dev, param_W, param_b, A_inv, G_inv):
     param_shape = grad.shape
     grad = grad.reshape(param_shape[0], -1)
     kfgrads = (G_inv.T.dot(grad)).dot(A_inv)
-    kfgrads = kfgrads.reshape(param_shape)
+    kfgrads = kfgrads.reshape(param_shape).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1]
         param_b.kfgrad = kfgrads[:, -1]
