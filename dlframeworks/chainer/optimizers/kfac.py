@@ -270,12 +270,11 @@ class KFAC(chainer.optimizer.GradientMethod):
                         return _param
                 return None
 
-            for linkname in self.inv_dict.keys():
+            for linkname, (A_inv, G_inv) in self.inv_dict.items():
                 param_W = get_param(linkname + '/W')
                 param_b = get_param(linkname + '/b')
                 # Some links has empty b param
                 assert param_W is not None
-                A_inv, G_inv = self.inv_dict[linkname]
                 data = (param_W.data, param_b.data, A_inv, G_inv) \
                     if param_b is not None else \
                       (param_W.data, A_inv, G_inv)
@@ -332,8 +331,9 @@ class KFAC(chainer.optimizer.GradientMethod):
                 np.sqrt(self.hyperparam.damping)
             inv = np.linalg.inv(ema + dmp)
             return inv
-        invs = (inv_cpu(ema) for ema in emas)
-        self.inv_dict[linkname] = invs 
+        A_ema, G_ema = emas
+        A_inv, G_inv = inv_cpu(A_ema), inv_cpu(G_ema)
+        self.inv_dict[linkname] = (A_inv, G_inv)
 
     def inv_update_core_gpu(self, linkname, emas):
         def inv_gpu(ema):
@@ -341,8 +341,9 @@ class KFAC(chainer.optimizer.GradientMethod):
                 cupy.sqrt(self.hyperparam.damping)
             inv = cupy.linalg.inv(ema + dmp)
             return inv
-        invs = (inv_gpu(ema) for ema in emas)
-        self.inv_dict[linkname] = invs 
+        A_ema, G_ema = emas
+        A_inv, G_inv = inv_gpu(A_ema), inv_gpu(G_ema)
+        self.inv_dict[linkname] = (A_inv, G_inv)
 
     def is_changed(self, target):
         previous_params = self.target_params
