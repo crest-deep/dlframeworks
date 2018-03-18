@@ -83,41 +83,42 @@ Actual: {0}'''.format(type(data))
         self._check(data)
         self.grad = data
 
-def _cov_linear(dev, acts, grads):
+def _cov_linear(dev, acts, grads, plus):
     n, _ = acts.shape
-    if int(dev) == -1:
-        ones = np.ones(n)
-        acts_plus = np.column_stack((acts, ones))
-    else:
-        ones = cupy.ones(n)
-        acts_plus = cupy.column_stack((acts, ones))
+    if plus:
+        if int(dev) == -1:
+            ones = np.ones(n)
+            acts = np.column_stack((acts, ones))
+        else:
+            ones = cupy.ones(n)
+            acts = cupy.column_stack((acts, ones))
 
-    A = acts_plus.T.dot(acts_plus) / n
+    A = acts.T.dot(acts) / n
     G = grads.T.dot(grads) / n
     return [A, G]
 
-def _cov_convolution_2d(dev, acts, grads, ksize, stride, pad):
+
+def _cov_convolution_2d(dev, acts, grads, ksize, stride, pad, plus):
     acts_expand = im2col(acts, ksize, stride, pad).data
     n, _, ho, wo = acts_expand.shape
     acts_expand = acts_expand.transpose(0, 2, 3, 1)
     acts_expand = acts_expand.reshape(n*ho*wo, -1)
-    if int(dev) == -1:
-        ones = np.ones(n*ho*wo)
-        acts_expand_plus = np.column_stack((acts_expand, ones))
-    else:
-        ones = cupy.ones(n*ho*wo)
-        acts_expand_plus = cupy.column_stack((acts_expand, ones))
+    if plus:
+        if int(dev) == -1:
+            ones = np.ones(n*ho*wo)
+            acts_expand = np.column_stack((acts_expand, ones))
+        else:
+            ones = cupy.ones(n*ho*wo)
+            acts_expand = cupy.column_stack((acts_expand, ones))
 
     n, _, ho, wo = grads.shape
     grads = grads.transpose(0, 2, 3, 1)
     grads = grads.reshape(n*ho*wo, -1)
 
-    A = acts_expand_plus.T.dot(acts_expand_plus) / n
+    A = acts_expand.T.dot(acts_expand) / n
     G = grads.T.dot(grads) / (n*ho*wo)
     return [A, G]
 
-def _cov_convolution_2d_doubly_factored(dev, acts, grads, ksize, stride, pad):
-    raise NotImplementedError
 
 def _kfac_backward(link, backward_main):
     """Backward function for KFAC optimizer.
@@ -164,6 +165,7 @@ def _kfac_backward(link, backward_main):
                   conv_args_dict[linkname] = ksize, stride, pad
     return acts_dict, grads_dict, ranks_dict, conv_args_dict
 
+
 def _kfac_grad(dev, param_W, param_b, invs):
     A_inv, G_inv = invs
     grad = param_W.grad
@@ -172,8 +174,7 @@ def _kfac_grad(dev, param_W, param_b, invs):
             grad = np.column_stack([grad, param_b.grad])
         else:
             grad = cupy.column_stack([grad, param_b.grad])
-    else:
-        A_inv = A_inv[:-1, :-1]
+
     param_shape = grad.shape
     grad = grad.reshape(param_shape[0], -1)
     kfgrads = (G_inv.T.dot(grad)).dot(A_inv)
@@ -184,8 +185,10 @@ def _kfac_grad(dev, param_W, param_b, invs):
     else:
         param_W.kfgrad = kfgrads
         
+        
 def _kfac_grad_doubly_factored(dev, param_W, param_b, invs):
     raise NotImplementedError
+
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
@@ -215,7 +218,8 @@ class KFAC(chainer.optimizer.GradientMethod):
                  lr=_default_hyperparam.lr,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
-                 damping=_default_hyperparam.damping):
+                 damping=_default_hyperparam.damping,
+                 use_doubly_factored=False,):
         super(KFAC, self).__init__()
         self.communicator = communicator
         self.hyperparam.lr = lr
@@ -223,6 +227,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
+        self.use_doubly_factored = use_doubly_factored
         self.target_params = []
         self.acts_dict = {}
         self.grads_dict = {}
@@ -271,15 +276,10 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.grads_dict = g_s_link.unpack()
             # ===============================
 
-            def get_param(path):
-                for _name, _param in self.target.namedparams():
-                    if _name == path:
-                        return _param
-                return None
 
             for linkname, invs in self.inv_dict.items():
-                param_W = get_param(linkname + '/W')
-                param_b = get_param(linkname + '/b')
+                param_W = self.get_param(linkname + '/W')
+                param_b = self.get_param(linkname + '/b')
                 # Some links has empty b param
                 assert param_W is not None
                 data = (param_W.data, param_b.data, invs) \
@@ -294,6 +294,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         for param in self.target.params():
             param.update()
 
+    def get_param(self, path):
+        for _name, _param in self.target.namedparams():
+            if _name == path:
+                return _param
+        return None
+
     def cov_ema_update(self):
         for linkname in self.ranks_dict.keys():
             # Update A_ema, G_ema by acts, grads
@@ -302,12 +308,13 @@ class KFAC(chainer.optimizer.GradientMethod):
     def cov_ema_update_core(self, linkname):
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
+        plus = self.get_param(linkname + '/b') is not None
         with cuda.get_device_from_array(acts, grads) as dev:
             if acts.ndim == 2: # linear
-                covs = _cov_linear(dev, acts, grads)
+                covs = _cov_linear(dev, acts, grads, plus)
             elif acts.ndim == 4: # convolution_2d
                 ksize, stride, pad = self.conv_args_dict[linkname] 
-                covs = _cov_convolution_2d(dev, acts, grads, ksize, stride, pad)
+                covs = _cov_convolution_2d(dev, acts, grads, ksize, stride, pad, plus)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
