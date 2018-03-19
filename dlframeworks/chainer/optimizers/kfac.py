@@ -320,13 +320,15 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.target.cleargrads()
             else:
                 self.target.zerograds()
-            # We will remove ``loss.backward()`` from here.
-            # Do backprop, and obtain ``grads`` which contains the dependency
-            # graph inside.
+
             backward_main = getattr(loss, '_backward_main')
 
-            self.acts_dict, self.grads_dict, self.ranks_dict, self.conv_args_dict = \
-                _kfac_backward(self.target, backward_main)
+            if self.t == 0:
+                _, _, self.ranks_dict, self.conv_args_dict = \
+                    _kfac_backward(self.target, backward_main)
+            else:
+                loss.backward()
+
             del loss  # No more backward computation, free memory
 
             # ======== communication ========
@@ -346,7 +348,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.acts_dict = a_s_link.unpack()
                 self.grads_dict = g_s_link.unpack()
             # ===============================
-
 
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
