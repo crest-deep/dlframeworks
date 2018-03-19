@@ -420,29 +420,33 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def inv_update_core(self, linkname, emas):
         with cuda.get_device_from_array(*emas) as dev:
-            if int(dev) == -1:
-                self.inv_update_core_cpu(linkname, emas)
-            else:
-                self.inv_update_core_gpu(linkname, emas)
-                
+            lib = np if int(dev) == -1 else cupy
+        num_ema = len(emas)
 
-    def inv_update_core_cpu(self, linkname, emas):
-        # TODO change damping along to num of emas & bias
-        def inv_cpu(ema):
-            dmp = np.identity(ema.shape[0]) * \
-                np.sqrt(self.hyperparam.damping)
-            return np.linalg.inv(ema + dmp)
-        invs = [inv_cpu(ema) for ema in emas]
-        self.inv_dict[linkname] = invs
+        def inv_2factors(ema):
+            dmp = lib.identity(ema.shape[0]) * \
+                lib.sqrt(self.hyperparam.damping)
+            return lib.linalg.inv(ema + dmp)
 
+        def inv_3factors(ema):
+            dmp = lib.identity(ema.shape[0]) * \
+                lib.cbrt(self.hyperparam.damping)
+            return lib.linalg.inv(ema + dmp)
 
-    def inv_update_core_gpu(self, linkname, emas):
-        # TODO change damping along to num of emas & bias
-        def inv_gpu(ema):
-            dmp = cupy.identity(ema.shape[0]) * \
-                cupy.sqrt(self.hyperparam.damping)
-            return cupy.linalg.inv(ema + dmp)
-        invs = [inv_gpu(ema) for ema in emas]
+        if len(emas) == 2:
+            invs = [inv_2factors(ema) for ema in emas]
+        elif len(emas) == 3:
+            invs = [inv_3factors(ema) for ema in emas]
+        elif len(emas) == 4:
+            invs = [inv_3factors(ema) for ema in emas[:3]]
+            Fb_ema = emas[3]
+            dmp = lib.identity(Fb_ema.shape[0]) * \
+                               self.hyperparam.damping
+            Fb_inv = lib.linalg.inv(Fb_ema + dmp)
+            invs.append(Fb_inv)
+        else:
+            raise Exception('Lengh of emas has to be in [2, 3, 4]')
+
         self.inv_dict[linkname] = invs
 
 
