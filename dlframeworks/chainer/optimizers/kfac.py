@@ -5,6 +5,8 @@ from collections import OrderedDict
 import numpy as np
 import time
 
+from dlframeworks.chainer.communicators import AsymCommunicator
+
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.cov_ema_decay = 0.99
@@ -232,23 +234,42 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def update(self, lossfun=None, *args, **kwds):
         if self.inv_server:
+            # Using inverse computing server
             comm = self.communicator
-            if comm is not None and hasattr(comm, 'is_master'):
-                if comm.is_master:
-                    self.recv_cov_ema()
-                    self.inv_update()
-                    self.send_inv()
-                else:
-                    if self.t % self.hyperparam.inv_freq and self.t > 0:
+            assert isinstance(comm, AsymCommunicator), \
+                'Only AsymCommunicator can be used with KFAC inv_server.'
+            if comm.is_master:
+                self.recv_cov_ema()
+                self.inv_update()
+                self.send_inv()
+            else:
+
+                def common_update():
+                    self.update_main(lossfun, *args, **kwds)
+                    self.cov_ema_update()
+
+                if comm.is_sub_master:
+                    if self.t == 0:
+                        common_update()
                         self.send_cov_ema()
+                    elif self.t % self.hyperparam.inv_freq == 0:
                         self.recv_inv()
+                        common_update()
+                        self.send_cov_ema()
                     else:
-                        self.update_main(lossfun, *args, **kwds)
-                        self.cov_ema_update()
+                        common_update()
+                else:
+                    if self.t == 0:
+                        common_update()
+                    elif self.t % self.hyperparam.inv_freq == 0:
+                        self.recv_inv()
+                        common_update()
+                    else:
+                        common_update()
         else:
             self.update_main(lossfun, *args, **kwds)
             self.cov_ema_update()
-            if self.t % self.hyperparam.inv_freq and self.t > 0:
+            if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
                 self.inv_update()
 
     def update_main(self, lossfun=None, *args, **kwds):
@@ -360,7 +381,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
         self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
-
     def inv_update(self):
         for linkname, (A_ema, G_ema) in self.cov_ema_dict.items():
             A_dmp = np.identity(A_ema.shape[0]) * \
@@ -370,6 +390,25 @@ class KFAC(chainer.optimizer.GradientMethod):
             A_inv = np.linalg.inv(A_ema + A_dmp)
             G_inv = np.linalg.inv(G_ema + G_dmp)
             self.inv_dict[linkname] = (A_inv, G_inv)
+
+    def send_cov_ema(self):
+        rank = self.communicator.rank
+        print(rank, 'send_cov_ema()')
+
+
+    def recv_cov_ema(self):
+        rank = self.communicator.rank
+        print(rank, 'recv_cov_ema()')
+
+    def send_inv(self):
+        """Send A_inv and G_inv to grad server"""
+        rank = self.communicator.rank
+        print(rank, 'recv_cov_ema()')
+
+    def recv_inv(self):
+        """Recv A_inv and G_inv from inv server"""
+        rank = self.communicator.rank
+        print(rank, 'recv_cov_ema()')
 
     def is_changed(self, target):
         previous_params = self.target_params

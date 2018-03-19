@@ -36,19 +36,29 @@ class AsymCommunicator(object):
         worldcomm = chainermn.create_communicator(
             communicator_name=communicator_name, mpi_comm=mpi_comm)
 
+
         # Create worker group
-        if worldcomm.size * ratio >= worldcomm.inter_size:
+        if worldcomm.size == 1:
+            raise ValueError('Communicator size must be largaer than 1')
+        elif worldcomm.intra_size < 2:
+            raise ValueError('Intra communicator size must be largaer than 1')
+        elif worldcomm.size * ratio >= worldcomm.inter_size:
             n_masters = worldcomm.inter_size
         else:
             n_masters = max(int(worldcomm.size * ratio), 1)
         nodes = list(range(worldcomm.inter_size))
         groups = list(_split(nodes, n_masters))
-        is_master = 0
+        is_master = False
+        is_sub_master = False
         for i, group in enumerate(groups):
             if worldcomm.inter_rank in group:
                 my_group = i
-            if worldcomm.inter_rank == group[0] and worldcomm.intra_rank == 0:
-                is_master = 1
+            if worldcomm.inter_rank == group[0]:
+                if worldcomm.intra_rank == 0:
+                    is_master = True
+                elif worldcomm.intra_rank == 1:
+                    is_sub_master = True
+
 
         # Create MPI intra communicator for allreducing gradients
         intra_comm_a = worldcomm.split(color=is_master, key=worldcomm.rank)
@@ -75,6 +85,8 @@ class AsymCommunicator(object):
             'my_group', my_group)
         super(AsymCommunicator, self).__setattr__(
             'is_master', is_master)
+        super(AsymCommunicator, self).__setattr__(
+            'is_sub_master', is_sub_master)
 
     def __getattr__(self, name):
         return getattr(self.intra_comm_a, name)
