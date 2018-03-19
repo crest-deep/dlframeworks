@@ -100,6 +100,7 @@ def _cov_linear(dev, acts, grads, nobias):
 
 def _cov_convolution_2d(dev, acts, grads, nobias, \
                             ksize, stride, pad):
+    n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
     if not nobias:
         if int(dev) == -1:
@@ -113,8 +114,9 @@ def _cov_convolution_2d(dev, acts, grads, nobias, \
     return [A, G]
     
 
-def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, param_b, \
+def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, \
                                             ksize, stride, pad):
+    n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
     acts_expand = acts_expand.reshape(n, ho*wo, -1)
     lib = np if int(dev) == -1 else lib = cupy
@@ -133,8 +135,8 @@ def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, param_b, \
     if nobias:
         return [U, V, G]
     else:
-        grad = param_b.grad
-        Fb = grad.dot(grad.T) # full Fisher block for bias
+        b_grads = grads.sum(axis=(2,3))
+        Fb = b_grads.T.dot(b_grads.T) # full Fisher block for bias
         return [U, V, G, Fb]
 
 
@@ -394,7 +396,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                                                ksize, stride, pad)
                 else:
                     covs = _cov_convolution_2d_doubly_factored(
-                                               dev, acts, grads, nobias, param_b, \
+                                               dev, acts, grads, nobias, \
                                                ksize, stride, pad,
                                                )
             else:
