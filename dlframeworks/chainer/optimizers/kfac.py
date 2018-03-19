@@ -83,9 +83,9 @@ Actual: {0}'''.format(type(data))
         self._check(data)
         self.grad = data
 
-def _cov_linear(dev, acts, grads, plus):
+def _cov_linear(dev, acts, grads, nobias):
     n, _ = acts.shape
-    if plus:
+    if not nobias:
         if int(dev) == -1:
             ones = np.ones(n)
             acts = np.column_stack((acts, ones))
@@ -98,26 +98,60 @@ def _cov_linear(dev, acts, grads, plus):
     return [A, G]
 
 
-def _cov_convolution_2d(dev, acts, grads, ksize, stride, pad, plus):
-    acts_expand = im2col(acts, ksize, stride, pad).data
-    n, _, ho, wo = acts_expand.shape
-    acts_expand = acts_expand.transpose(0, 2, 3, 1)
-    acts_expand = acts_expand.reshape(n*ho*wo, -1)
-    if plus:
+def _cov_convolution_2d(dev, acts, grads, nobias, \
+                            ksize, stride, pad):
+    acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
+    if not nobias:
         if int(dev) == -1:
             ones = np.ones(n*ho*wo)
             acts_expand = np.column_stack((acts_expand, ones))
         else:
             ones = cupy.ones(n*ho*wo)
             acts_expand = cupy.column_stack((acts_expand, ones))
+    A = acts_expand.T.dot(acts_expand) / n
+    G = _grads_cov_convolution_2d(grads)
+    return [A, G]
+    
 
+def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, param_b, \
+                                            ksize, stride, pad):
+    acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
+    acts_expand = acts_expand.reshape(n, ho*wo, -1)
+    lib = np if int(dev) == -1 else lib = cupy
+    u_expand = lib.zeros((n, ho*wo))
+    v_expand = lib.zeros((n, c))
+    for i in range(n): 
+        # TODO implement fast rank-1 approximation
+        u, s, v = lib.linalg.svd(acts_expand[i])
+        u1 = lib.sqrt(s[0]) * u[0]
+        v1 = lib.sqrt(s[0]) * v.T[0]
+        u_expand[i] = u1 
+        v_expand[i] = v1 
+    U = u_expand.T.dot(u_expand) / n
+    V = v_expand.T.dot(v_expand) / n
+    G = _grads_cov_convolution_2d(grads)
+    if nobias:
+        return [U, V, G]
+    else:
+        grad = param_b.grad
+        Fb = grad.dot(grad.T) # full Fisher block for bias
+        return [U, V, G, Fb]
+
+
+def _grads_cov_convolution_2d(grads):
     n, _, ho, wo = grads.shape
     grads = grads.transpose(0, 2, 3, 1)
     grads = grads.reshape(n*ho*wo, -1)
-
-    A = acts_expand.T.dot(acts_expand) / n
     G = grads.T.dot(grads) / (n*ho*wo)
-    return [A, G]
+    return G
+
+
+def _acts_expand_convolution_2d(acts, ksize, stride, pad)
+    acts_expand = im2col(acts, ksize, stride, pad).data
+    n, c, ho, wo = acts_expand.shape
+    acts_expand = acts_expand.transpose(0, 2, 3, 1)
+    acts_expand = acts_expand.reshape(n*ho*wo, -1)
+    return acts_expand
 
 
 def _kfac_backward(link, backward_main):
@@ -166,28 +200,59 @@ def _kfac_backward(link, backward_main):
     return acts_dict, grads_dict, ranks_dict, conv_args_dict
 
 
-def _kfac_grad(dev, param_W, param_b, invs):
+def _kfac_grad_update(dev, param_W, param_b, invs):
     A_inv, G_inv = invs
     grad = param_W.grad
+    c_o, c_i, h, w = grad.shape
+    grad = grad.reshape(c_o, -1)
     if param_b is not None:
         if int(dev) == -1:
             grad = np.column_stack([grad, param_b.grad])
         else:
             grad = cupy.column_stack([grad, param_b.grad])
-
-    param_shape = grad.shape
-    grad = grad.reshape(param_shape[0], -1)
-    kfgrads = (G_inv.T.dot(grad)).dot(A_inv)
-    kfgrads = kfgrads.reshape(param_shape).astype(grad.dtype)
+    kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.type)
     if param_b is not None:
-        param_W.kfgrad = kfgrads[:, :-1]
-        param_b.kfgrad = kfgrads[:, -1]
+        param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
+        param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
     else:
-        param_W.kfgrad = kfgrads
+        param_W.kfgrad = kfgrads.reshape(param_W.grad.shape)
         
         
-def _kfac_grad_doubly_factored(dev, param_W, param_b, invs):
-    raise NotImplementedError
+def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
+    if param_b is not None:
+        U_inv, V_inv, G_inv, Fb_inv = invs
+         # Apply full Fisher block to bias
+         grad = param_b.grad
+         kfgrad = bF_inv.dot(grad)
+         param_b.kfgrad = kfgrad
+    else:
+        U_inv, V_inv, G_inv = invs
+
+    grad = param_W.grad
+    c_o, c_i, h, w = grad.shape
+    grad = grad.transpose(2, 3, 1, 0)
+    grad = grad.reshape(h*w, c_i, c_out)
+
+    def rmatmul(inv, array, index):
+        assert array.ndim == 3
+        assert index in [0, 1, 2]
+        d0, d1, d2 = array.shape
+        if index == 0:
+            array = array.reshape(d0, d1*d2)
+            return inv.dot(array).reshape(d0, d1, d2)    
+        elif index == 1:
+            array = array.transpose(1, 0, 2)
+            array = array.reshape(d1, d0*d2)
+            result = inv.dot(array).reshape(d1, d0, d2)    
+            return result.transpose(1, 0, 2)
+        else index == 2:
+            array = array.transpose(2, 0, 1)
+            array = array.reshape(d2, -1)
+            result = inv.dot(array).reshape(d2, d0, d1)    
+            return result.transpose(2, 0, 1)
+
+     kfgrad = rmatmul(G_inv, rmatmul(V_inv, rmatmul(U_inv, grad)))
+     param_W.kfgrad = kfgrad.reshape(param_W.grad.shape)
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -196,11 +261,13 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
         super(KFACUpdateRule, self).__init__(
             parent_hyperparam or _default_hyperparam)
 
+
     def update_core_cpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
         if grad is None:
             return
         param.data -= self.hyperparam.lr * grad
+
 
     def update_core_gpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
@@ -219,7 +286,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
                  damping=_default_hyperparam.damping,
-                 use_doubly_factored=False,):
+                 use_doubly_factored=True,):
         super(KFAC, self).__init__()
         self.communicator = communicator
         self.hyperparam.lr = lr
@@ -238,8 +305,10 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     lr = optimizer.HyperparameterProxy('lr')
 
+
     def create_update_rule(self):
         return KFACUpdateRule(self.hyperparam)
+
 
     def update(self, lossfun=None, *args, **kwds):
         if lossfun is not None:
@@ -283,10 +352,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                 # Some links has empty b param
                 assert param_W is not None
                 data = (param_W.data, param_b.data, invs) \
-                    if param_b is not None else \
-                      (param_W.data, invs)
+                    if param_b is not None else (param_W.data, invs)
                 with cuda.get_device_from_array(*data) as dev:
-                    _kfac_grad(dev, param_W, param_b, invs)
+                    if self.use_doubly_factored:
+                        _kfac_grad_update_doubly_factored(dev, param_W, param_b, invs)
+                    else:
+                        _kfac_grad_update(dev, param_W, param_b, invs)
 
         self.reallocate_cleared_grads()
         self.call_hooks()
@@ -294,27 +365,38 @@ class KFAC(chainer.optimizer.GradientMethod):
         for param in self.target.params():
             param.update()
 
+
     def get_param(self, path):
         for _name, _param in self.target.namedparams():
             if _name == path:
                 return _param
         return None
 
+
     def cov_ema_update(self):
         for linkname in self.ranks_dict.keys():
             # Update A_ema, G_ema by acts, grads
             self.cov_ema_update_core(linkname)
 
+
     def cov_ema_update_core(self, linkname):
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
-        plus = self.get_param(linkname + '/b') is not None
+        param_b = self.get_param(linkname + '/b')
+        nobias = param_b is None
         with cuda.get_device_from_array(acts, grads) as dev:
             if acts.ndim == 2: # linear
-                covs = _cov_linear(dev, acts, grads, plus)
+                covs = _cov_linear(dev, acts, grads, nobias)
             elif acts.ndim == 4: # convolution_2d
                 ksize, stride, pad = self.conv_args_dict[linkname] 
-                covs = _cov_convolution_2d(dev, acts, grads, ksize, stride, pad, plus)
+                if self.use_doubly_factored:
+                    covs = _cov_convolution_2d(dev, acts, grads, nobias, \
+                                               ksize, stride, pad)
+                else:
+                    covs = _cov_convolution_2d_doubly_factored(
+                                               dev, acts, grads, nobias, param_b, \
+                                               ksize, stride, pad,
+                                               )
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
@@ -327,10 +409,12 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 self.cov_ema_dict[linkname] = covs
 
+
     def inv_update(self):
         for linkname, emas in self.cov_ema_dict.items():
             # Update A_inv, G_inv by A_ema, G_ema
             self.inv_update_core(linkname, emas)
+
 
     def inv_update_core(self, linkname, emas):
         with cuda.get_device_from_array(*emas) as dev:
@@ -339,7 +423,9 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 self.inv_update_core_gpu(linkname, emas)
                 
+
     def inv_update_core_cpu(self, linkname, emas):
+        # TODO change damping along to num of emas & bias
         def inv_cpu(ema):
             dmp = np.identity(ema.shape[0]) * \
                 np.sqrt(self.hyperparam.damping)
@@ -347,13 +433,16 @@ class KFAC(chainer.optimizer.GradientMethod):
         invs = [inv_cpu(ema) for ema in emas]
         self.inv_dict[linkname] = invs
 
+
     def inv_update_core_gpu(self, linkname, emas):
+        # TODO change damping along to num of emas & bias
         def inv_gpu(ema):
             dmp = cupy.identity(ema.shape[0]) * \
                 cupy.sqrt(self.hyperparam.damping)
             return cupy.linalg.inv(ema + dmp)
         invs = [inv_gpu(ema) for ema in emas]
         self.inv_dict[linkname] = invs
+
 
     def is_changed(self, target):
         previous_params = self.target_params
