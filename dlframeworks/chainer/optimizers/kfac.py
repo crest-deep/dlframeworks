@@ -223,9 +223,9 @@ def _kfac_grad_update(dev, param_W, param_b, invs):
 def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
     if param_b is not None:
         U_inv, V_inv, G_inv, Fb_inv = invs
-         # Apply full Fisher block to bias
+         # Apply inverse of full Fisher block (Fb_inv) to bias
          grad = param_b.grad
-         kfgrad = bF_inv.dot(grad)
+         kfgrad = Fb_inv.dot(grad)
          param_b.kfgrad = kfgrad
     else:
         U_inv, V_inv, G_inv = invs
@@ -377,7 +377,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def cov_ema_update(self):
         for linkname in self.ranks_dict.keys():
-            # Update A_ema, G_ema by acts, grads
             self.cov_ema_update_core(linkname)
 
 
@@ -397,8 +396,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 else:
                     covs = _cov_convolution_2d_doubly_factored(
                                                dev, acts, grads, nobias, \
-                                               ksize, stride, pad,
-                                               )
+                                               ksize, stride, pad)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
@@ -414,7 +412,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def inv_update(self):
         for linkname, emas in self.cov_ema_dict.items():
-            # Update A_inv, G_inv by A_ema, G_ema
             self.inv_update_core(linkname, emas)
 
 
@@ -433,19 +430,19 @@ class KFAC(chainer.optimizer.GradientMethod):
                 lib.cbrt(self.hyperparam.damping)
             return lib.linalg.inv(ema + dmp)
 
-        if len(emas) == 2:
-            invs = [inv_2factors(ema) for ema in emas]
-        elif len(emas) == 3:
-            invs = [inv_3factors(ema) for ema in emas]
-        elif len(emas) == 4:
+        if len(emas) == 2:   # [A_ema, G_ema]
+            invs = [inv_2factors(ema) for ema in emas] 
+        elif len(emas) == 3: # [U_ema, V_ema, G_ema]
+            invs = [inv_3factors(ema) for ema in emas] 
+        elif len(emas) == 4: # [U_ema, V_ema, G_ema, Fb_ema]
             invs = [inv_3factors(ema) for ema in emas[:3]]
-            Fb_ema = emas[3]
+            Fb_ema = emas[-1]
             dmp = lib.identity(Fb_ema.shape[0]) * \
                                self.hyperparam.damping
             Fb_inv = lib.linalg.inv(Fb_ema + dmp)
             invs.append(Fb_inv)
         else:
-            raise Exception('Lengh of emas has to be in [2, 3, 4]')
+            raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
         self.inv_dict[linkname] = invs
 
