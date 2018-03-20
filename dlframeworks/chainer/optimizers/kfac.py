@@ -119,7 +119,7 @@ def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, \
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
     acts_expand = acts_expand.reshape(n, ho*wo, -1)
-    lib = np if int(dev) == -1 else lib = cupy
+    lib = np if int(dev) == -1 else cupy
     u_expand = lib.zeros((n, ho*wo))
     v_expand = lib.zeros((n, c))
     for i in range(n): 
@@ -148,7 +148,7 @@ def _grads_cov_convolution_2d(grads):
     return G
 
 
-def _acts_expand_convolution_2d(acts, ksize, stride, pad)
+def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     acts_expand = im2col(acts, ksize, stride, pad).data
     n, c, ho, wo = acts_expand.shape
     acts_expand = acts_expand.transpose(0, 2, 3, 1)
@@ -223,10 +223,10 @@ def _kfac_grad_update(dev, param_W, param_b, invs):
 def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
     if param_b is not None:
         U_inv, V_inv, G_inv, Fb_inv = invs
-         # Apply inverse of full Fisher block (Fb_inv) to bias
-         grad = param_b.grad
-         kfgrad = Fb_inv.dot(grad)
-         param_b.kfgrad = kfgrad
+        # Apply inverse of full Fisher block (Fb_inv) to bias
+        grad = param_b.grad
+        kfgrad = Fb_inv.dot(grad)
+        param_b.kfgrad = kfgrad
     else:
         U_inv, V_inv, G_inv = invs
 
@@ -237,7 +237,6 @@ def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
 
     def rmatmul(inv, array, index):
         assert array.ndim == 3
-        assert index in [0, 1, 2]
         d0, d1, d2 = array.shape
         if index == 0:
             array = array.reshape(d0, d1*d2)
@@ -247,14 +246,16 @@ def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
             array = array.reshape(d1, d0*d2)
             result = inv.dot(array).reshape(d1, d0, d2)    
             return result.transpose(1, 0, 2)
-        else index == 2:
+        elif index == 2:
             array = array.transpose(2, 0, 1)
             array = array.reshape(d2, -1)
             result = inv.dot(array).reshape(d2, d0, d1)    
             return result.transpose(2, 0, 1)
+        else:
+            raise ValueError('Index has to be in [0, 1, 2]')
 
-     kfgrad = rmatmul(G_inv, rmatmul(V_inv, rmatmul(U_inv, grad)))
-     param_W.kfgrad = kfgrad.reshape(param_W.grad.shape)
+    kfgrad = rmatmul(G_inv, rmatmul(V_inv, rmatmul(U_inv, grad)))
+    param_W.kfgrad = kfgrad.reshape(param_W.grad.shape)
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -382,6 +383,7 @@ class KFAC(chainer.optimizer.GradientMethod):
 
 
     def cov_ema_update_core(self, linkname):
+        loss_fun = self.target
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
         param_b = self.get_param(linkname + '/b')
