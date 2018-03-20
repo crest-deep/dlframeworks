@@ -5,6 +5,8 @@ from chainer.functions import im2col
 import numpy as np
 import cupy
 
+from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
@@ -345,6 +347,8 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
+            if self.communicator is not None:
+                allreduce_cov(self.communicator, covs)
             if linkname in self.cov_ema_dict.keys():
                 alpha = self.hyperparam.cov_ema_decay
                 cov_emas = self.cov_ema_dict[linkname]
