@@ -5,6 +5,8 @@ from chainer.functions import im2col
 import numpy as np
 import cupy
 
+from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
@@ -258,6 +260,8 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.grads_dict = {}
         self.rank_dict = {}
         self.conv_args_dict = {}
+
+        # TODO Initialize below with all batch
         self.cov_ema_dict = {}
         self.inv_dict = {}
 
@@ -265,14 +269,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         if communicator is not None:
             if communicator.size > 1:
                 self._require_communication = True
-
-        self.times = {}
-        self.times['forward'] = 0
-        self.times['backward'] = 0
-        self.times['comm_grad'] = 0
-        self.times['calc_kfgrad'] = 0
-        self.times['update_time'] = 0
-        self.times['cov_ema_update_time'] = 0
 
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
@@ -284,10 +280,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def update(self, lossfun=None, *args, **kwds):
         if lossfun is not None:
-            self.times['start'] = time.time()
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
-            self.times['forward'] += time.time() - self.times['start']
             if use_cleargrads:
                 self.target.cleargrads()
             else:
@@ -295,7 +289,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             loss.backward()
             del loss  # No more backward computation, free memory
-            self.times['backward'] += time.time() - self.times['start']
 
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
@@ -354,6 +347,8 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
+            if self.communicator is not None:
+                allreduce_cov(self.communicator, covs)
             if linkname in self.cov_ema_dict.keys():
                 alpha = self.hyperparam.cov_ema_decay
                 cov_emas = self.cov_ema_dict[linkname]
@@ -362,9 +357,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = cov_emas
             else:
                 self.cov_ema_dict[linkname] = covs
-
-
-        self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
     def inv_update(self):
         for linkname, emas in self.cov_ema_dict.items():
@@ -376,6 +368,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             lib = np if int(dev) == -1 else cupy
         num_ema = len(emas)
 
+        # TODO add plus value (pi) for damping
         def inv_2factors(ema):
             dmp = lib.identity(ema.shape[0]) * \
                 lib.sqrt(self.hyperparam.damping)
@@ -401,3 +394,4 @@ class KFAC(chainer.optimizer.GradientMethod):
             raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
         self.inv_dict[linkname] = invs
+
