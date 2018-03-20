@@ -65,11 +65,10 @@ def bcast_inv(comm, invs):
     """
     root = comm.inv_worker_rank
 
-    for linkname, matrices in invs.items():
-        for matrix in matrices:
-            matrix_link = DummyLink(matrix)
-            comm.gcomm_g.broadcast_data(matrix_link)
-            invs[linkname] = matrix_link.data
+    for linkname, matrix in invs.items():
+        matrix_link = DummyLink(matrix)
+        comm.gcomm_g.broadcast_data(matrix_link)
+        invs[linkname] = matrix_link.data
 
 
 def allreduce_cov(comm, covs):
