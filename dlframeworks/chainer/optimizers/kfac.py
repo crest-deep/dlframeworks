@@ -339,7 +339,8 @@ class KFAC(chainer.optimizer.GradientMethod):
             for linkname in self.rank_dict.keys():
                 self.cov_ema_update_core(linkname)
             # ======== Communication
-            send_cov_ema_dict(self.communicator, self.cov_ema_dict)
+            if self.communicator is not None:
+                send_cov_ema_dict(self.communicator, self.cov_ema_dict)
 
 
     def cov_ema_update_core(self, linkname):
@@ -361,8 +362,8 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
+            # ======== Communication
             if self.communicator is not None:
-                # ======== Communication
                 allreduce_cov(self.communicator, covs)
             if linkname in self.cov_ema_dict.keys():
                 alpha = self.hyperparam.cov_ema_decay
@@ -375,11 +376,13 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def inv_update(self):
         # ======== Communication
-        send_cov_ema_dict(self.communicator, self.cov_ema_dict)
+        if self.communicator is not None:
+            send_cov_ema_dict(self.communicator, self.cov_ema_dict)
         for linkname, emas in self.cov_ema_dict.items():
             self.inv_update_core(linkname, emas)
         # ======== Communication
-        bcast_inv(self.communicator, self.inv_dict)
+        if self.communicator is not None:
+            bcast_inv(self.communicator, self.inv_dict)
 
 
     def inv_update_core(self, linkname, emas):
