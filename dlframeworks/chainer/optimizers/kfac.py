@@ -258,6 +258,8 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.grads_dict = {}
         self.rank_dict = {}
         self.conv_args_dict = {}
+
+        # TODO Initialize below with all batch
         self.cov_ema_dict = {}
         self.inv_dict = {}
 
@@ -362,6 +364,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             lib = np if int(dev) == -1 else cupy
         num_ema = len(emas)
 
+        # TODO add plus value (pi) for damping
         def inv_2factors(ema):
             dmp = lib.identity(ema.shape[0]) * \
                 lib.sqrt(self.hyperparam.damping)
@@ -387,3 +390,4 @@ class KFAC(chainer.optimizer.GradientMethod):
             raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
         self.inv_dict[linkname] = invs
+
