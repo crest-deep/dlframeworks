@@ -78,14 +78,14 @@ def allreduce_cov(comm, covs):
     Args:
         comm (chainermn._base.CommunicatorBase): Wrapped ChainerMN
             communicator.
-        covs (OrderedDict(str, numpy.array)): Send buffer or recv buffer of
+        covs (list(numpy.array)): Send buffer or recv buffer of
             covariance matrices.
     """
-    for linkname, matrices in covs.items():
-        for matrix in matrices:
-            matrix_link = DummyLink(matrix)
-            comm.ccomm.allreduce_grad(matrix_link)
-            matrix = matrix_link.data
+    for i, matrix in enumerate(covs):
+        matrix_link = DummyLink(matrix)
+        comm.ccomm.allreduce_grad(matrix_link)
+        covs[i] = matrix_link.data
+
 
 def send_cov_ema_dict(comm,cov_ema):
     """
