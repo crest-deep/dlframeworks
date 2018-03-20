@@ -101,7 +101,7 @@ def _cov_linear(dev, acts, grads, nobias):
 def _cov_convolution_2d(dev, acts, grads, nobias, \
                             ksize, stride, pad):
     n, _, _, _ = acts.shape
-    acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
+    acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     if not nobias:
         if int(dev) == -1:
             ones = np.ones(n*ho*wo)
@@ -156,20 +156,8 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     return acts_expand
 
 
-def _kfac_backward(link, backward_main):
-    """Backward function for KFAC optimizer.
-
-    This function is invoked from ``KFAC.update()`` to:
-        1. calculate backprop
-        2. obtain a (activations)
-        3. obtain g (gradients of activation's input).
-
-    """
-    with chainer.using_config('enable_backprop', False):
-        # To obtain grads, we need to edit a file ``variable.py``
-        grads = backward_main(retain_grad=True, loss_scale=None)
-
-    namedparams = list(link.namedparams())
+def _kfac_backward(loss, chain):
+    namedparams = list(chain.namedparams())
 
     def get_linkname(param):
         # Get a linkname from a parameter.
@@ -181,38 +169,54 @@ def _kfac_backward(link, backward_main):
 
     acts_dict = {}
     grads_dict = {}
-    ranks_dict = {}
+    rank_dict = {}
     conv_args_dict = {}
-    for node, grads in grads.items():
-        creator_node = node.creator_node  # parent function node
-        if creator_node is not None:  # ignore leaf node
-            if isinstance(creator_node, _linear_function) \
-              or isinstance(creator_node, _convolution_2d_function):
-                (acts, param) = creator_node.get_retained_inputs()
-                linkname = get_linkname(param)
-                assert linkname is not None, 'linkname cannot be None.' 
-                acts_dict[linkname] = acts.data  # numpy or cupy
-                grads_dict[linkname] = grads.data  # numpy or cupy
-                ranks_dict[linkname] = creator_node.rank
-                if isinstance(creator_node, _convolution_2d_function):
-                  conv = creator_node
-                  stride, pad  = conv.sy, conv.ph
-                  _, _, ksize, _ = param.data.shape
-                  conv_args_dict[linkname] = ksize, stride, pad
-    return acts_dict, grads_dict, ranks_dict, conv_args_dict
+
+    output_vars = []
+    linknames = []
+
+    func_node = loss.creator_node
+    while func_node:
+        if isinstance(func_node, _linear_function) \
+          or isinstance(func_node, _convolution_2d_function):
+            (acts_var, param) = func_node.get_retained_inputs()
+            linkname = get_linkname(param)
+            assert linkname is not None, 'linkname cannot be None.'
+            acts_dict[linkname] = acts_var.data  
+            rank_dict[linkname] = func_node.rank
+            linknames.append(linkname)
+
+            (preacts_var,) = func_node.get_retained_outputs()
+            output_vars.append(preacts_var)
+
+            if isinstance(func_node, _convolution_2d_function):
+                conv = func_node
+                stride, pad = conv.sy, conv.ph
+                _, _, ksize, _ = param.data.shape
+                conv_args_dict[linkname] = ksize, stride, pad
+
+        input_var_node = func_node.inputs[0]
+        func_node = input_var_node.creator_node
+
+    grads_vars = chainer.grad([loss], output_vars)
+    for i, linkname in enumerate(linknames):
+        grads_dict[linkname] = grads_vars[i].data
+
+    return acts_dict, grads_dict, rank_dict, conv_args_dict
 
 
 def _kfac_grad_update(dev, param_W, param_b, invs):
     A_inv, G_inv = invs
     grad = param_W.grad
-    c_o, c_i, h, w = grad.shape
-    grad = grad.reshape(c_o, -1)
+    if grad.ndim == 4: # convolution_2d
+        c_o, c_i, h, w = grad.shape
+        grad = grad.reshape(c_o, -1)
     if param_b is not None:
         if int(dev) == -1:
             grad = np.column_stack([grad, param_b.grad])
         else:
             grad = cupy.column_stack([grad, param_b.grad])
-    kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.type)
+    kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
         param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
@@ -301,7 +305,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.target_params = []
         self.acts_dict = {}
         self.grads_dict = {}
-        self.ranks_dict = {}
+        self.rank_dict = {}
         self.conv_args_dict = {}
         self.cov_ema_dict = {}
         self.inv_dict = {}
@@ -322,14 +326,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 self.target.zerograds()
 
-            backward_main = getattr(loss, '_backward_main')
-
-            if self.t == 0:
-                _, _, self.ranks_dict, self.conv_args_dict = \
-                    _kfac_backward(self.target, backward_main)
-            else:
-                loss.backward()
-
+            loss.backward()
             del loss  # No more backward computation, free memory
 
             # ======== communication ========
@@ -357,10 +354,11 @@ class KFAC(chainer.optimizer.GradientMethod):
                 assert param_W is not None
                 data = (param_W.data, param_b.data, invs) \
                     if param_b is not None else (param_W.data, invs)
-                with cuda.get_device_from_array(*data) as dev:
-                    if self.use_doubly_factored:
-                        _kfac_grad_update_doubly_factored(dev, param_W, param_b, invs)
-                    else:
+
+                if len(invs) >= 3:
+                    _kfac_grad_update_doubly_factored(param_W, param_b, invs)
+                else:
+                    with cuda.get_device_from_array(*data) as dev:
                         _kfac_grad_update(dev, param_W, param_b, invs)
 
         self.reallocate_cleared_grads()
@@ -377,17 +375,20 @@ class KFAC(chainer.optimizer.GradientMethod):
         return None
 
 
-    def cov_ema_update(self):
-        for linkname in self.ranks_dict.keys():
-            self.cov_ema_update_core(linkname)
+    def cov_ema_update(self, lossfun=None, *args, **kwds):
+        if lossfun is not None:
+            loss = lossfun(*args, **kwds)
+            self.acts_dict, self.grads_dict, self.rank_dict, self.conv_args_dict = \
+                _kfac_backward(loss, self.target)
+
+            for linkname in self.rank_dict.keys():
+                self.cov_ema_update_core(linkname)
 
 
     def cov_ema_update_core(self, linkname):
-        loss_fun = self.target
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
-        param_b = self.get_param(linkname + '/b')
-        nobias = param_b is None
+        nobias = self.get_param(linkname + '/b') is None
         with cuda.get_device_from_array(acts, grads) as dev:
             if acts.ndim == 2: # linear
                 covs = _cov_linear(dev, acts, grads, nobias)
