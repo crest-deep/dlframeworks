@@ -6,6 +6,7 @@ import numpy as np
 import cupy
 
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
 from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
 from dlframeworks.chainer.optimizer.kfac_communicator import send_cov_ema_dict
 
@@ -291,6 +292,15 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             loss.backward()
             del loss  # No more backward computation, free memory
+
+            # ======== Communication
+            if self.communicator is not None:
+                synced = allreduce_grad(self.communicator, self)
+                if not synced:
+                    return
+                if self.t % self.inv_freq == 0:
+                    # Assuming self.inv_dict already has proper keys (linknames)
+                    bcast_inv(comm, self.inv_dict)
 
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
