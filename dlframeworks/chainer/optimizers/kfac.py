@@ -16,74 +16,6 @@ _default_hyperparam.damping = 0.001
 _linear_function = chainer.functions.connection.linear.LinearFunction
 _convolution_2d_function = chainer.functions.connection.convolution_2d.Convolution2DFunction
 
-class DummyLink(object):
-    """A dummy link that only has ``namedparams()`` function.
-
-    Since ChainerMN uses origianal communicators and those communicators only
-    defines ``send``, ``recv``, ``alltoall``, ``broadcast_data``, and
-    ``allreduce_grad``, we cannot use common ``MPI_Allreduce`` to reduce the
-    data (unless we are using ChainerMN communicator). To address this problem,
-    we will define a wrapper object that behaves like a ``chainer.Link``.
-
-    In the communication functions of ChainerMN communicators (e.g.
-    ``hierarchical_communicator``), they invoke ``extrac_params(model)`` to get
-    the list of ``chainer.Parameter`` objects (``model`` is passed from
-    ``allreduce_grad(model)``, defined in
-    ``chainermn/communicators/_memory_utility.py``). There is no other access
-    to the ``model`` argument, and it means we can replace this argument to a
-    non-``chainer.Link`` object if we can handle all attribution access to the
-    ``model``.
-
-    """
-
-    def __init__(self, arr):
-        self._params = {}
-        for name, data in arr.items():
-            self._params[name] = DummyVariable(data)
-
-    def namedparams(self):
-        for name, param in self._params.items():
-            yield name, param
-
-    def unpack(self):
-        arr = {}
-        for name, param in self._params.items():
-            arr[name] = param.data
-        return arr
-
-
-class DummyVariable(object):
-    """A dummy variable that returns ``data`` at ``grad``.
-
-    Similar to ``DummyLink``, this class is a wrapper class the behaves like
-    ``chainer.Variable``.
-
-    """
-
-    def __init__(self, data):
-        self._check(data)
-        self._data = [data]
-
-    def _check(self, data):
-        if (data is not None and
-                not isinstance(data, chainer.get_array_types())):
-            msg = '''numpy.ndarray or cuda.ndarray are expected.
-Actual: {0}'''.format(type(data))
-            raise TypeError(msg)
-
-    @property
-    def data(self):
-        return self._data[0]
-
-    @property
-    def grad(self):
-        return self._data[0]
-
-    @grad.setter
-    def grad(self, data):
-        self._check(data)
-        self.grad = data
-
 def _cov_linear(dev, acts, grads, nobias):
     n, _ = acts.shape
     if not nobias:
@@ -348,24 +280,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             loss.backward()
             del loss  # No more backward computation, free memory
 
-            # ======== communication ========
-            if self.communicator is not None:
-                target = self.target
-                a_s_link = DummyLink(self.acts_dict)
-                g_s_link = DummyLink(self.grads_dict)
-                if self.is_changed(target):
-                    # NN changed from previous iteration, must unify weights
-                    # within all processes
-                    self.communicator.broadcast_data(target)
-                    return
-                # Sumup all gradients, activations, and gs
-                self.communicator.allreduce_grad(target)
-                self.communicator.allreduce_grad(a_s_link)
-                self.communicator.allreduce_grad(g_s_link)
-                self.acts_dict = a_s_link.unpack()
-                self.grads_dict = g_s_link.unpack()
-            # ===============================
-
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
                 param_b = self.get_param(linkname + '/b')
@@ -468,17 +382,4 @@ class KFAC(chainer.optimizer.GradientMethod):
             raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
         self.inv_dict[linkname] = invs
-
-
-    def is_changed(self, target):
-        previous_params = self.target_params
-        self.target_params = [(name, param.data is not None)
-                              for name, param in sorted(target.namedparams())]
-        if len(previous_params) != len(self.target_params):
-            return True
-
-        for param1, param2 in zip(self.target_params, previous_params):
-            if (param1[0] != param2[0]) or param1[1] != param2[1]:
-                return True
-        return False
 
