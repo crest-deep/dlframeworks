@@ -6,6 +6,7 @@ import numpy as np
 import cupy
 
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
 from dlframeworks.chainer.optimizer.kfac_communicator import send_cov_ema_dict
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
@@ -363,8 +364,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = covs
 
     def inv_update(self):
+        # ======== Communication
+        send_cov_ema_dict(self.communicator, self.cov_ema_dict)
         for linkname, emas in self.cov_ema_dict.items():
             self.inv_update_core(linkname, emas)
+        # ======== Communication
+        bcast_inv(self.communicator, self.inv_dict)
 
 
     def inv_update_core(self, linkname, emas):
