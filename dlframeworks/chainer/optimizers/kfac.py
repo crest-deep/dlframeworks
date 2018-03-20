@@ -6,6 +6,7 @@ import numpy as np
 import cupy
 
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+from dlframeworks.chainer.optimizer.kfac_communicator import send_cov_ema_dict
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
@@ -326,6 +327,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             for linkname in self.rank_dict.keys():
                 self.cov_ema_update_core(linkname)
+            # ======== Communication
+            send_cov_ema_dict(self.communicator, self.cov_ema_dict)
 
 
     def cov_ema_update_core(self, linkname):
@@ -348,6 +351,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
             if self.communicator is not None:
+                # ======== Communication
                 allreduce_cov(self.communicator, covs)
             if linkname in self.cov_ema_dict.keys():
                 alpha = self.hyperparam.cov_ema_decay
