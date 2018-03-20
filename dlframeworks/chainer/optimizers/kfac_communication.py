@@ -87,6 +87,34 @@ def allreduce_cov(comm, covs):
             comm.ccomm.allreduce_grad(matrix_link)
             matrix = matrix_link.data
 
+def send_cov_ema_dict(comm,cov_ema):
+    """
+    cov_worker ---cov_ema_dict---> inv_worker
+    """
+    is_sender = comm.is_cov_worker
+    is_reciever = comm.is_inv_worker
+    def _make_presudo_odict(odic):
+        i = 0
+        dic = dict()
+        for k,v in odic.items():
+            dic[i] = (k,v)
+            i+=1
+        return dic
+
+    def _make_real_odict(dic):
+        odic = OrderedDict()
+        for _,v in sorted(dic.items()):
+            odic[v[0]] = v[1]
+        return odic
+
+    if is_sender:
+        s_dic = _make_presudo_odict( cov_ema )
+        comm.wcomm.mpi_comm.send(s_dic, dest=comm.inv_worker_rank)
+    elif is_reciever:
+        r_dic = comm.wcomm.mpi_comm.recv(source=comm.cov_worker_rank)
+        r_odic = _make_real_odict( r_dic )
+        for k,v in r_odic.items():
+            cov_ema[k] = v
 
 def _is_changed(optimizer):
     target = optimizer.target
