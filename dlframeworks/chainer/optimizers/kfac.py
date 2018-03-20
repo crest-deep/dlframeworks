@@ -8,6 +8,7 @@ import cupy
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
+_default_hyperparam.momentum = 0.9
 _default_hyperparam.cov_ema_decay = 0.99
 _default_hyperparam.inv_freq = 1
 _default_hyperparam.damping = 0.001
@@ -264,25 +265,40 @@ def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
-    def __init__(self, parent_hyperparam=None):
+    def __init__(self, parent_hyperparam=None, lr=None, momentum=None):
         super(KFACUpdateRule, self).__init__(
             parent_hyperparam or _default_hyperparam)
+        if lr is not None:
+            self.hyperparam.lr = lr
+        if momentum is not None:
+            self.hyperparam.momentum = momentum
 
+    def init_state(self, param):
+        xp = cuda.get_array_module(param.data)
+        with cuda.get_device_from_array(param.data):
+            self.state['v'] = xp.zeros_like(param.data)
 
     def update_core_cpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
         if grad is None:
             return
-        param.data -= self.hyperparam.lr * grad
+        v = self.state['v']
+        v *= self.hyperparam.momentum
+        v -= self.hyperparam.lr * grad
+        param.data += v
 
 
     def update_core_gpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
         if grad is None:
             return
-        cuda.elementwise('T grad, T lr', 'T param',
-                         'param -= lr * grad',
-                         'ngd')(grad, self.hyperparam.lr, param.data)
+        cuda.elementwise('T grad, T lr, T momentum', 
+                         'T param, T v',
+                         '''v = momentum * v - lr * grad;
+                            param += v;''',
+                         'ngd')(
+                             grad, self.hyperparam.lr, self.hyperparam.momentum,
+                             param.data, self.state['v'])
 
 
 class KFAC(chainer.optimizer.GradientMethod):
@@ -290,6 +306,7 @@ class KFAC(chainer.optimizer.GradientMethod):
     def __init__(self, 
                  communicator=None,
                  lr=_default_hyperparam.lr,
+                 momentum=_default_hyperparam.momentum,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
                  damping=_default_hyperparam.damping,
@@ -297,6 +314,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         super(KFAC, self).__init__()
         self.communicator = communicator
         self.hyperparam.lr = lr
+        self.hyperparam.momentum = momentum
         self.hyperparam.cov_ema_decay = cov_ema_decay
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
@@ -311,6 +329,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.inv_dict = {}
 
     lr = optimizer.HyperparameterProxy('lr')
+    momentum = optimizer.HyperparameterProxy('momentum')
 
 
     def create_update_rule(self):
@@ -355,10 +374,10 @@ class KFAC(chainer.optimizer.GradientMethod):
                 data = (param_W.data, param_b.data, invs) \
                     if param_b is not None else (param_W.data, invs)
 
-                if len(invs) >= 3:
-                    _kfac_grad_update_doubly_factored(param_W, param_b, invs)
-                else:
-                    with cuda.get_device_from_array(*data) as dev:
+                with cuda.get_device_from_array(*data) as dev:
+                    if len(invs) >= 3:
+                        _kfac_grad_update_doubly_factored(param_W, param_b, invs)
+                    else:
                         _kfac_grad_update(dev, param_W, param_b, invs)
 
         self.reallocate_cleared_grads()
