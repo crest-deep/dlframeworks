@@ -87,6 +87,18 @@ def allreduce_cov(comm, covs):
             comm.ccomm.allreduce_grad(matrix_link)
             matrix = matrix_link.data
 
+def send_param_data(comm,data):
+    """
+    grad_master ---param.data-->cov_worker 
+    """
+    is_sender = comm.is_grad_master
+    is_reciever = comm.is_cov_worker
+    
+    if is_sender:
+        comm.wcomm.mpi_comm.send(data,dest=comm.cov_worker_rank)
+    elif is_reciever:
+        data = comm.wcomm.mpi_comm.recv(source=comm.grad_master_rank)
+
 def send_cov_ema_dict(comm,cov_ema):
     """
     cov_worker ---cov_ema_dict---> inv_worker
