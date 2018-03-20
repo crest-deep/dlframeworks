@@ -266,14 +266,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             if communicator.size > 1:
                 self._require_communication = True
 
-        self.times = {}
-        self.times['forward'] = 0
-        self.times['backward'] = 0
-        self.times['comm_grad'] = 0
-        self.times['calc_kfgrad'] = 0
-        self.times['update_time'] = 0
-        self.times['cov_ema_update_time'] = 0
-
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
 
@@ -284,10 +276,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def update(self, lossfun=None, *args, **kwds):
         if lossfun is not None:
-            self.times['start'] = time.time()
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
-            self.times['forward'] += time.time() - self.times['start']
             if use_cleargrads:
                 self.target.cleargrads()
             else:
@@ -295,7 +285,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             loss.backward()
             del loss  # No more backward computation, free memory
-            self.times['backward'] += time.time() - self.times['start']
 
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
@@ -362,9 +351,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_dict[linkname] = cov_emas
             else:
                 self.cov_ema_dict[linkname] = covs
-
-
-        self.times['cov_ema_update_time'] += time.time() - cov_ema_update_time
 
     def inv_update(self):
         for linkname, emas in self.cov_ema_dict.items():
