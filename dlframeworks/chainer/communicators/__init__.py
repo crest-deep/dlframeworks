@@ -1,4 +1,4 @@
-from dlframeworks.chainer.communicators import asym_communicator  # NOQA
+from dlframeworks.chainer.communicators import kfac_communicator  # NOQA
 
 
-from dlframeworks.chainer.communicators.asym_communicator import AsymCommunicator  # NOQA
+from dlframeworks.chainer.communicators.kfac_communicator import KFACCommunicator  # NOQA
