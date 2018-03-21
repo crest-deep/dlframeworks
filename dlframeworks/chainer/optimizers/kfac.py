@@ -3,17 +3,17 @@ from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
 
-from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
-from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
-from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
-from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_cov_ema
-from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_param
+#from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
+#from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
+#from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
+#from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_cov_ema
+#from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_param
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
 _default_hyperparam.cov_ema_decay = 0.99
-_default_hyperparam.inv_freq = 1
+_default_hyperparam.inv_freq = 20
 _default_hyperparam.damping = 0.001
 
 
@@ -224,7 +224,7 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
                          'T param, T v',
                          '''v = momentum * v - lr * grad;
                             param += v;''',
-                         'ngd')(
+                         'kfac')(
                              grad, self.hyperparam.lr, self.hyperparam.momentum,
                              param.data, self.state['v'])
 
@@ -233,6 +233,7 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def __init__(self, 
                  communicator=None,
+                 inv_server=None,
                  lr=_default_hyperparam.lr,
                  momentum=_default_hyperparam.momentum,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
@@ -275,7 +276,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         if self.communicator is None:
             self.grad_update(lossfun, *args, **kwds)
             self.cov_ema_update(lossfun, *args, **kwds)
-            if self.t % self.inv_freq == 0 and self.t > 0:
+            if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
                 self.inv_update()
         else:
             if communicator.is_grad_worker:
@@ -413,7 +414,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 dmp = xp.identity(ema.shape[0]) * \
                     xp.cbrt(self.hyperparam.damping)
                 return xp.linalg.inv(ema + dmp)
-            param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
+           # param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
             if len(emas) == 2:   # [A_ema, G_ema]
                 invs = [inv_2factors(ema) for ema in emas] 
