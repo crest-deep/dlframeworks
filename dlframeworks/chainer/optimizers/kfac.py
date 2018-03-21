@@ -2,8 +2,6 @@ import chainer
 from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
-import numpy as np
-import cupy
 
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
@@ -22,50 +20,44 @@ _default_hyperparam.damping = 0.001
 _linear_function = chainer.functions.connection.linear.LinearFunction
 _convolution_2d_function = chainer.functions.connection.convolution_2d.Convolution2DFunction
 
-def _cov_linear(dev, acts, grads, nobias):
+def _cov_linear(xp, acts, grads, nobias):
+    # Note that this method is called inside a with-statement of xp module
     n, _ = acts.shape
     if not nobias:
-        if int(dev) == -1:
-            ones = np.ones(n)
-            acts = np.column_stack((acts, ones))
-        else:
-            ones = cupy.ones(n)
-            acts = cupy.column_stack((acts, ones))
+        ones = xp.ones(n)
+        acts = xp.column_stack((acts, ones))
 
     A = acts.T.dot(acts) / n
     G = grads.T.dot(grads) / n
     return [A, G]
 
 
-def _cov_convolution_2d(dev, acts, grads, nobias, \
+def _cov_convolution_2d(xp, acts, grads, nobias, \
                             ksize, stride, pad):
+    # Note that this method is called inside a with-statement of xp module
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     if not nobias:
-        if int(dev) == -1:
-            ones = np.ones(n*ho*wo)
-            acts_expand = np.column_stack((acts_expand, ones))
-        else:
-            ones = cupy.ones(n*ho*wo)
-            acts_expand = cupy.column_stack((acts_expand, ones))
+        ones = xp.ones(n*ho*wo)
+        acts_expand = xp.column_stack((acts_expand, ones))
     A = acts_expand.T.dot(acts_expand) / n
     G = _grads_cov_convolution_2d(grads)
     return [A, G]
     
 
-def _cov_convolution_2d_doubly_factored(dev, acts, grads, nobias, \
+def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, \
                                             ksize, stride, pad):
+    # Note that this method is called inside a with-statement of xp module
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
     acts_expand = acts_expand.reshape(n, ho*wo, -1)
-    lib = np if int(dev) == -1 else cupy
-    u_expand = lib.zeros((n, ho*wo))
-    v_expand = lib.zeros((n, c))
+    u_expand = xp.zeros((n, ho*wo))
+    v_expand = xp.zeros((n, c))
     for i in range(n): 
         # TODO implement fast rank-1 approximation
-        u, s, v = lib.linalg.svd(acts_expand[i])
-        u1 = lib.sqrt(s[0]) * u[0]
-        v1 = lib.sqrt(s[0]) * v.T[0]
+        u, s, v = xp.linalg.svd(acts_expand[i])
+        u1 = xp.sqrt(s[0]) * u[0]
+        v1 = xp.sqrt(s[0]) * v.T[0]
         u_expand[i] = u1 
         v_expand[i] = v1 
     U = u_expand.T.dot(u_expand) / n
@@ -144,17 +136,15 @@ def _kfac_backward(loss, chain):
     return acts_dict, grads_dict, rank_dict, conv_args_dict
 
 
-def _kfac_grad_update(dev, param_W, param_b, invs):
+def _kfac_grad_update(xp, param_W, param_b, invs):
+    # Note that this method is called inside a with-statement of xp module
     A_inv, G_inv = invs
     grad = param_W.grad
     if grad.ndim == 4: # convolution_2d
         c_o, c_i, h, w = grad.shape
         grad = grad.reshape(c_o, -1)
     if param_b is not None:
-        if int(dev) == -1:
-            grad = np.column_stack([grad, param_b.grad])
-        else:
-            grad = cupy.column_stack([grad, param_b.grad])
+        grad = xp.column_stack([grad, param_b.grad])
     kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
@@ -328,11 +318,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                 data = (param_W.data, param_b.data, invs) \
                     if param_b is not None else (param_W.data, invs)
 
-                with cuda.get_device_from_array(*data) as dev:
+                xp = cuda.get_array_module(*data)
+                with cuda.get_device_from_array(*data):
                     if len(invs) >= 3:
                         _kfac_grad_update_doubly_factored(param_W, param_b, invs)
                     else:
-                        _kfac_grad_update(dev, param_W, param_b, invs)
+                        _kfac_grad_update(xp, param_W, param_b, invs)
 
         self.reallocate_cleared_grads()
         self.call_hooks()
@@ -368,32 +359,33 @@ class KFAC(chainer.optimizer.GradientMethod):
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
         nobias = self.get_param(linkname + '/b') is None
-        with cuda.get_device_from_array(acts, grads) as dev:
+        xp = cuda.get_array_module(acts, grads)
+        with cuda.get_device_from_array(acts, grads):
             if acts.ndim == 2: # linear
-                covs = _cov_linear(dev, acts, grads, nobias)
+                covs = _cov_linear(xp, acts, grads, nobias)
             elif acts.ndim == 4: # convolution_2d
                 ksize, stride, pad = self.conv_args_dict[linkname] 
                 if self.use_doubly_factored:
-                    covs = _cov_convolution_2d(dev, acts, grads, nobias, \
+                    covs = _cov_convolution_2d(xp, acts, grads, nobias, \
                                                ksize, stride, pad)
                 else:
                     covs = _cov_convolution_2d_doubly_factored(
-                                               dev, acts, grads, nobias, \
+                                               xp, acts, grads, nobias, \
                                                ksize, stride, pad)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
-            # ======== Communication
-            if self.communicator is not None:
-                allreduce_cov(self.communicator, covs)
-            if linkname in self.cov_ema_dict.keys():
-                alpha = self.hyperparam.cov_ema_decay
-                cov_emas = self.cov_ema_dict[linkname]
-                for i, cov_ema in enumerate(cov_emas):
-                    cov_emas[i] = alpha * covs[i] + (1 - alpha) * cov_ema
-                self.cov_ema_dict[linkname] = cov_emas
-            else:
-                self.cov_ema_dict[linkname] = covs
+        # ======== Communication
+        if self.communicator is not None:
+            allreduce_cov(self.communicator, covs)
+        if linkname in self.cov_ema_dict.keys():
+            alpha = self.hyperparam.cov_ema_decay
+            cov_emas = self.cov_ema_dict[linkname]
+            for i, cov_ema in enumerate(cov_emas):
+                cov_emas[i] = alpha * covs[i] + (1 - alpha) * cov_ema
+            self.cov_ema_dict[linkname] = cov_emas
+        else:
+            self.cov_ema_dict[linkname] = covs
 
     def inv_update(self):
         # ======== Communication
@@ -407,35 +399,35 @@ class KFAC(chainer.optimizer.GradientMethod):
 
 
     def inv_update_core(self, linkname, emas):
-        with cuda.get_device_from_array(*emas) as dev:
-            lib = np if int(dev) == -1 else cupy
         num_ema = len(emas)
+        xp = cuda.get_array_module(*emas)
+        with cuda.get_device_from_array(*emas):
 
-        # TODO add plus value (pi) for damping
-        def inv_2factors(ema):
-            dmp = lib.identity(ema.shape[0]) * \
-                lib.sqrt(self.hyperparam.damping)
-            return lib.linalg.inv(ema + dmp)
+            # TODO add plus value (pi) for damping
+            def inv_2factors(ema):
+                dmp = xp.identity(ema.shape[0]) * \
+                    xp.sqrt(self.hyperparam.damping)
+                return xp.linalg.inv(ema + dmp)
 
-        def inv_3factors(ema):
-            dmp = lib.identity(ema.shape[0]) * \
-                lib.cbrt(self.hyperparam.damping)
-            return lib.linalg.inv(ema + dmp)
-        param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
+            def inv_3factors(ema):
+                dmp = xp.identity(ema.shape[0]) * \
+                    xp.cbrt(self.hyperparam.damping)
+                return xp.linalg.inv(ema + dmp)
+            param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
-        if len(emas) == 2:   # [A_ema, G_ema]
-            invs = [inv_2factors(ema) for ema in emas] 
-        elif len(emas) == 3: # [U_ema, V_ema, G_ema]
-            invs = [inv_3factors(ema) for ema in emas] 
-        elif len(emas) == 4: # [U_ema, V_ema, G_ema, Fb_ema]
-            invs = [inv_3factors(ema) for ema in emas[:3]]
-            Fb_ema = emas[-1]
-            dmp = lib.identity(Fb_ema.shape[0]) * \
-                               self.hyperparam.damping
-            Fb_inv = lib.linalg.inv(Fb_ema + dmp)
-            invs.append(Fb_inv)
-        else:
-            raise ValueError('Lengh of emas has to be in [2, 3, 4]')
+            if len(emas) == 2:   # [A_ema, G_ema]
+                invs = [inv_2factors(ema) for ema in emas] 
+            elif len(emas) == 3: # [U_ema, V_ema, G_ema]
+                invs = [inv_3factors(ema) for ema in emas] 
+            elif len(emas) == 4: # [U_ema, V_ema, G_ema, Fb_ema]
+                invs = [inv_3factors(ema) for ema in emas[:3]]
+                Fb_ema = emas[-1]
+                dmp = xp.identity(Fb_ema.shape[0]) * \
+                                   self.hyperparam.damping
+                Fb_inv = xp.linalg.inv(Fb_ema + dmp)
+                invs.append(Fb_inv)
+            else:
+                raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
         self.inv_dict[linkname] = invs
 
