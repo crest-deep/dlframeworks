@@ -241,7 +241,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                  use_doubly_factored=True,):
         super(KFAC, self).__init__()
         self.communicator = communicator
-        self.inv_server = inv_server
         self.hyperparam.lr = lr
         self.hyperparam.momentum = momentum
         self.hyperparam.cov_ema_decay = cov_ema_decay
@@ -259,11 +258,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.cov_ema_dict = {}
         self.inv_dict = {}
 
-        self._require_communication = False
-        if communicator is not None:
-            if communicator.size > 1:
-                self._require_communication = True
-
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
 
@@ -272,16 +266,17 @@ class KFAC(chainer.optimizer.GradientMethod):
         return KFACUpdateRule(self.hyperparam)
 
     def update(self, lossfun=None, *args, **kwds):
-        if self.communicator is None:
+        comm = self.communicator
+        if comm is None:
             self.grad_update(lossfun, *args, **kwds)
             self.cov_ema_update(lossfun, *args, **kwds)
             if self.t % self.inv_freq == 0 and self.t > 0:
                 self.inv_update()
         else:
-            if communicator.is_grad_worker:
+            if comm.is_grad_worker:
                 self.grad_update(lossfun, *args, **kwds)
-            elif communicator.is_cov_worker:
-                self.grad_update(lossfun, *args, **kwds)
+            elif comm.is_cov_worker:
+                self.cov_ema_update(lossfun, *args, **kwds)
             else:
                 self.inv_update()
 
