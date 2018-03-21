@@ -3,11 +3,11 @@ from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
 
-from dlframeworks.chainer.optimizers.kfac_communicator import allreduce_cov
-from dlframeworks.chainer.optimizers.kfac_communicator import allreduce_grad
-from dlframeworks.chainer.optimizers.kfac_communicator import bcast_inv
-from dlframeworks.chainer.optimizers.kfac_communicator import sendrecv_cov_ema
-from dlframeworks.chainer.optimizers.kfac_communicator import sendrecv_param
+from dlframeworks.chainer.optimizers.kfac_communication import allreduce_cov
+from dlframeworks.chainer.optimizers.kfac_communication import allreduce_grad
+from dlframeworks.chainer.optimizers.kfac_communication import bcast_inv
+from dlframeworks.chainer.optimizers.kfac_communication import sendrecv_cov_ema
+from dlframeworks.chainer.optimizers.kfac_communication import sendrecv_param
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
