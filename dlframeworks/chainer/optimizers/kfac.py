@@ -48,8 +48,8 @@ def _cov_convolution_2d(xp, acts, grads, nobias, \
 def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, \
                                             ksize, stride, pad):
     # Note that this method is called inside a with-statement of xp module
-    n, _, _, _ = acts.shape
-    acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
+    n, c, ho, wo = acts.shape
+    acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     acts_expand = acts_expand.reshape(n, ho*wo, -1)
     u_expand = xp.zeros((n, ho*wo))
     v_expand = xp.zeros((n, c))
@@ -145,7 +145,7 @@ def _kfac_grad_update(xp, param_W, param_b, invs):
         grad = grad.reshape(c_o, -1)
     if param_b is not None:
         grad = xp.column_stack([grad, param_b.grad])
-    kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.dtype)
+    kfgrads = xp.dot(xp.dot(G_inv.T, grad), A_inv).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
         param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
@@ -238,9 +238,9 @@ class KFAC(chainer.optimizer.GradientMethod):
                  momentum=_default_hyperparam.momentum,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
-                 inv_alg = 'cholesky',
+                 inv_alg=None,
                  damping=_default_hyperparam.damping,
-                 use_doubly_factored=True,):
+                 use_doubly_factored=False,):
         super(KFAC, self).__init__()
         self.communicator = communicator
         self.inv_server = inv_server
@@ -369,11 +369,10 @@ class KFAC(chainer.optimizer.GradientMethod):
             elif acts.ndim == 4: # convolution_2d
                 ksize, stride, pad = self.conv_args_dict[linkname] 
                 if self.use_doubly_factored:
-                    covs = _cov_convolution_2d(xp, acts, grads, nobias, \
+                    covs = _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, \
                                                ksize, stride, pad)
                 else:
-                    covs = _cov_convolution_2d_doubly_factored(
-                                               xp, acts, grads, nobias, \
+                    covs = _cov_convolution_2d(xp, acts, grads, nobias, \
                                                ksize, stride, pad)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
@@ -440,5 +439,5 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Lengh of emas has to be in [2, 3, 4]')
 
-        self.inv_dict[linkname] = invs
+            self.inv_dict[linkname] = invs
 
