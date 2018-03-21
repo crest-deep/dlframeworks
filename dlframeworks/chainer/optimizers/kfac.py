@@ -281,8 +281,21 @@ class KFAC(chainer.optimizer.GradientMethod):
     def create_update_rule(self):
         return KFACUpdateRule(self.hyperparam)
 
-
     def update(self, lossfun=None, *args, **kwds):
+        if self.communicator is None:
+            self.grad_update(lossfun, *args, **kwds)
+            self.cov_ema_update(lossfun, *args, **kwds)
+            if self.t % self.inv_freq == 0 and self.t > 0:
+                self.inv_update()
+        else:
+            if communicator.is_grad_worker:
+                self.grad_update(lossfun, *args, **kwds)
+            elif communicator.is_cov_worker:
+                self.grad_update(lossfun, *args, **kwds)
+            else:
+                self.inv_update()
+
+    def grad_update(self, lossfun=None, *args, **kwds):
         # ======== Communication
         if self.communicator is not None:
             if self.t % inv_freq == 1:
