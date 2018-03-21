@@ -88,14 +88,10 @@ def allreduce_cov(comm, covs):
 
 def send_param_data(comm,optimizer):
     """
-    grad_master ---param.data-->cov_worker 
+    grad_master ---optimizer-->cov_worker 
     """
     is_sender = comm.is_grad_master
     is_reciever = comm.is_cov_worker
-    """
-    chainはkfac.targetで取ってこれるのか?
-    chain = kfac.target ?
-    """
     params = list( optimizer.target.namedparams() )
     params = sorted( params, params.keys() )
 
@@ -103,9 +99,6 @@ def send_param_data(comm,optimizer):
         for param in params:
             comm.wcomm.mpi_comm.send( param[0], dest=comm.cov_worker_rank )
     elif is_reciever:
-        """
-        linknameはどうやって取ればいいか?
-        """
         for linkname , _ in params:
             params[linkname] = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
