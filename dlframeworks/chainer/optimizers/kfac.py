@@ -267,15 +267,14 @@ class KFAC(chainer.optimizer.GradientMethod):
             self.inv_dict,
         ]
 
-
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
 
     def setup(self, link):
         super(KFAC, self).setup(link)
         linknames = [name for name, _ in sorted(link.namedparams())]
-        for dictionary in self.dictionaries:
-            dictionary = collections.OrderedDict.fromkeys(linknames)
+        for i, dictionary in enumerate(self.dictionaries):
+            self.dictionaries[i] = collections.OrderedDict.fromkeys(linknames)
 
     def create_update_rule(self):
         return KFACUpdateRule(self.hyperparam)
