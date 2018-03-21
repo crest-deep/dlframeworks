@@ -86,17 +86,31 @@ def allreduce_cov(comm, covs):
         covs[i] = matrix_link.data
 
 
-def send_param_data(comm,data):
+def send_param_data(comm,optimizer):
     """
     grad_master ---param.data-->cov_worker 
     """
     is_sender = comm.is_grad_master
     is_reciever = comm.is_cov_worker
-    
+    """
+    chainはkfac.targetで取ってこれるのか?
+    chain = kfac.target ?
+    """
+    params = list( optimizer.target.namedparams() )
+    params = sorted( params, params.keys() )
+
     if is_sender:
-        comm.wcomm.mpi_comm.send(data,dest=comm.cov_worker_rank)
+        for param in params:
+            comm.wcomm.mpi_comm.send( param[0], dest=comm.cov_worker_rank )
     elif is_reciever:
-        data = comm.wcomm.mpi_comm.recv(source=comm.grad_master_rank)
+        """
+        linknameはどうやって取ればいいか?
+        """
+        for linkname , _ in params:
+            params[linkname] = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
+
+    
+    
 
 def send_cov_ema_dict(comm,cov_ema):
     """
