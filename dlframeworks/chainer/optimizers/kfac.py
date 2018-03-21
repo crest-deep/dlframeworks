@@ -421,6 +421,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             dmp = lib.identity(ema.shape[0]) * \
                 lib.cbrt(self.hyperparam.damping)
             return lib.linalg.inv(ema + dmp)
+        param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
         if len(emas) == 2:   # [A_ema, G_ema]
             invs = [inv_2factors(ema) for ema in emas] 
