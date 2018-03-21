@@ -9,6 +9,7 @@ from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
 from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
 from dlframeworks.chainer.optimizer.kfac_communicator import send_cov_ema_dict
+from dlframeworks.chainer.optimizer.kfac_communicator import send_param_data
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
@@ -282,6 +283,10 @@ class KFAC(chainer.optimizer.GradientMethod):
 
 
     def update(self, lossfun=None, *args, **kwds):
+        # ======== Communication
+        if self.communicator is not None:
+            if self.t % inv_freq == 1:
+               send_param_data(self.communicator, self) 
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -298,7 +303,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 synced = allreduce_grad(self.communicator, self)
                 if not synced:
                     return
-                if self.t % self.inv_freq == 0:
+                if self.t % self.inv_freq == 0 and self.t > 0:
                     # Assuming self.inv_dict already has proper keys (linknames)
                     bcast_inv(comm, self.inv_dict)
 
@@ -331,6 +336,9 @@ class KFAC(chainer.optimizer.GradientMethod):
 
 
     def cov_ema_update(self, lossfun=None, *args, **kwds):
+        # ======== Communication
+        if self.communicator is not None:
+            send_param_data(self.communicator, self)
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, self.conv_args_dict = \
