@@ -238,6 +238,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                  momentum=_default_hyperparam.momentum,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
                  inv_freq=_default_hyperparam.inv_freq,
+                 inv_alg = 'cholesky',
                  damping=_default_hyperparam.damping,
                  use_doubly_factored=True,):
         super(KFAC, self).__init__()
@@ -255,6 +256,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.grads_dict = {}
         self.rank_dict = {}
         self.conv_args_dict = {}
+        self.inv_alg = inv_alg
 
         # TODO Initialize below with all batch
         self.cov_ema_dict = {}
@@ -403,18 +405,26 @@ class KFAC(chainer.optimizer.GradientMethod):
         num_ema = len(emas)
         xp = cuda.get_array_module(*emas)
         with cuda.get_device_from_array(*emas):
+            # param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
             # TODO add plus value (pi) for damping
             def inv_2factors(ema):
                 dmp = xp.identity(ema.shape[0]) * \
-                    xp.sqrt(self.hyperparam.damping)
-                return xp.linalg.inv(ema + dmp)
-
+                  xp.sqrt(self.hyperparam.damping)
+                return inv(ema + dmp)
+            
             def inv_3factors(ema):
                 dmp = xp.identity(ema.shape[0]) * \
-                    xp.cbrt(self.hyperparam.damping)
-                return xp.linalg.inv(ema + dmp)
-           # param = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
+                  xp.cbrt(self.hyperparam.damping)
+                return inv(ema + dmp)
+
+            def inv(X):
+                alg = self.inv_alg
+                if alg == 'cholesky':
+                    c = xp.linalg.inv(xp.linalg.cholesky(X))
+                    return xp.dot(c.T, c)
+                else:
+                    return xp.linalg.inv(X)
 
             if len(emas) == 2:   # [A_ema, G_ema]
                 invs = [inv_2factors(ema) for ema in emas] 
@@ -425,7 +435,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 Fb_ema = emas[-1]
                 dmp = xp.identity(Fb_ema.shape[0]) * \
                                    self.hyperparam.damping
-                Fb_inv = xp.linalg.inv(Fb_ema + dmp)
+                Fb_inv = inv(Fb_ema + dmp)
                 invs.append(Fb_inv)
             else:
                 raise ValueError('Lengh of emas has to be in [2, 3, 4]')
