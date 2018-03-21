@@ -86,26 +86,24 @@ def allreduce_cov(comm, covs):
         covs[i] = matrix_link.data
 
 
-def send_param_data(comm,optimizer):
+def sendrecv_chian(comm,optimizer):
     """
     grad_master ---optimizer-->cov_worker 
     """
     is_sender = comm.is_grad_master
     is_reciever = comm.is_cov_worker
-    params = list( optimizer.target.namedparams() )
-    params = sorted( params, params.keys() )
+    params = list(optimizer.target.namedparams())
+    params = sorted(params, params.keys())
 
     if is_sender:
         for param in params:
-            comm.wcomm.mpi_comm.send( param[0], dest=comm.cov_worker_rank )
+            comm.wcomm.mpi_comm.send(param[0], dest=comm.cov_worker_rank)
     elif is_reciever:
-        for linkname , _ in params:
+        for linkname, _ in params:
             params[linkname] = comm.wcomm.mpi_comm.recv(source = comm.grad_master_rank)
 
-    
-    
 
-def send_cov_ema_dict(comm,cov_ema):
+def sendrecv_cov_ema(comm,cov_ema):
     """
     cov_worker ---cov_ema_dict---> inv_worker
     """
@@ -115,24 +113,25 @@ def send_cov_ema_dict(comm,cov_ema):
         i = 0
         dic = dict()
         for k,v in odic.items():
-            dic[i] = (k,v)
-            i+=1
+            dic[i] = (k, v)
+            i += 1
         return dic
 
     def _make_real_odict(dic):
         odic = OrderedDict()
-        for _,v in sorted(dic.items()):
+        for _, v in sorted(dic.items()):
             odic[v[0]] = v[1]
         return odic
 
     if is_sender:
-        s_dic = _make_presudo_odict( cov_ema )
+        s_dic = _make_presudo_odict(cov_ema)
         comm.wcomm.mpi_comm.send(s_dic, dest=comm.inv_worker_rank)
     elif is_reciever:
         r_dic = comm.wcomm.mpi_comm.recv(source=comm.cov_worker_rank)
-        r_odic = _make_real_odict( r_dic )
+        r_odic = _make_real_odict(r_dic)
         for k,v in r_odic.items():
             cov_ema[k] = v
+
 
 def _is_changed(optimizer):
     target = optimizer.target
