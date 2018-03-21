@@ -86,7 +86,7 @@ def allreduce_cov(comm, covs):
         covs[i] = matrix_link.data
 
 
-def sendrecv_chian(comm,optimizer):
+def sendrecv_param(comm,optimizer):
     """
     grad_master ---optimizer-->cov_worker 
     """
