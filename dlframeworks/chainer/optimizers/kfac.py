@@ -8,8 +8,8 @@ import cupy
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_cov
 from dlframeworks.chainer.optimizer.kfac_communicator import allreduce_grad
 from dlframeworks.chainer.optimizer.kfac_communicator import bcast_inv
-from dlframeworks.chainer.optimizer.kfac_communicator import send_cov_ema_dict
-from dlframeworks.chainer.optimizer.kfac_communicator import send_param_data
+from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_cov_ema
+from dlframeworks.chainer.optimizer.kfac_communicator import sendrecv_param
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
@@ -299,7 +299,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         # ======== Communication
         if self.communicator is not None:
             if self.t % inv_freq == 1:
-               send_param_data(self.communicator, self) 
+               sendrecv_param(self.communicator, self) 
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -351,7 +351,7 @@ class KFAC(chainer.optimizer.GradientMethod):
     def cov_ema_update(self, lossfun=None, *args, **kwds):
         # ======== Communication
         if self.communicator is not None:
-            send_param_data(self.communicator, self)
+            sendrecv_param(self.communicator, self)
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, self.conv_args_dict = \
@@ -361,7 +361,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
             if self.communicator is not None:
-                send_cov_ema_dict(self.communicator, self.cov_ema_dict)
+                sendrecv_cov_ema(self.communicator, self.cov_ema_dict)
 
 
     def cov_ema_update_core(self, linkname):
@@ -398,7 +398,7 @@ class KFAC(chainer.optimizer.GradientMethod):
     def inv_update(self):
         # ======== Communication
         if self.communicator is not None:
-            send_cov_ema_dict(self.communicator, self.cov_ema_dict)
+            sendrecv_cov_ema(self.communicator, self.cov_ema_dict)
         for linkname, emas in self.cov_ema_dict.items():
             self.inv_update_core(linkname, emas)
         # ======== Communication
