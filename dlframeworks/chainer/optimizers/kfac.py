@@ -50,8 +50,8 @@ def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, \
     # Note that this method is called inside a with-statement of xp module
     n, c, ho, wo = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
-    acts_expand = acts_expand.reshape(n, ho*wo, -1)
-    u_expand = xp.zeros((n, ho*wo))
+    acts_expand = acts_expand.reshape(n*ho*wo, ksize*kszie, -1)
+    u_expand = xp.zeros((n, ksize*ksize))
     v_expand = xp.zeros((n, c))
     for i in range(n): 
         # TODO implement fast rank-1 approximation
@@ -129,7 +129,9 @@ def _kfac_backward(loss, chain):
         input_var_node = func_node.inputs[0]
         func_node = input_var_node.creator_node
 
+    # backprop
     grads_vars = chainer.grad([loss], output_vars)
+
     for i, linkname in enumerate(linknames):
         grads_dict[linkname] = grads_vars[i].data
 
@@ -145,7 +147,7 @@ def _kfac_grad_update(xp, param_W, param_b, invs):
         grad = grad.reshape(c_o, -1)
     if param_b is not None:
         grad = xp.column_stack([grad, param_b.grad])
-    kfgrads = xp.dot(xp.dot(G_inv.T, grad), A_inv).astype(grad.dtype)
+    kfgrads = xp.dot(xp.dot(G_inv, grad), A_inv).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
         param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
@@ -201,10 +203,12 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
         if momentum is not None:
             self.hyperparam.momentum = momentum
 
+
     def init_state(self, param):
         xp = cuda.get_array_module(param.data)
         with cuda.get_device_from_array(param.data):
             self.state['v'] = xp.zeros_like(param.data)
+
 
     def update_core_cpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
@@ -350,6 +354,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, self.conv_args_dict = \
                 _kfac_backward(loss, self.target)
+            del loss
 
             for linkname in self.rank_dict.keys():
                 self.cov_ema_update_core(linkname)
