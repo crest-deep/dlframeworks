@@ -88,7 +88,14 @@ def allreduce_cov(comm, covs):
 
 def sendrecv_param(comm,optimizer):
     """
-    grad_master ---optimizer-->cov_worker 
+    この実装ならoptimizerではなくtarget (chain)を引数にもらってもいいのでは?
+    """
+    """Send ans recieve optimizer.target (grad_master -> cov_worker)
+
+    Args:
+        comm (chainermn._base.CommunicatorBase): Wrapped ChainerMN
+            communicator.
+        optimizer (KFAC): 
     """
     is_sender = comm.is_grad_master
     is_reciever = comm.is_cov_worker
@@ -104,8 +111,13 @@ def sendrecv_param(comm,optimizer):
 
 
 def sendrecv_cov_ema(comm,cov_ema):
-    """
-    cov_worker ---cov_ema_dict---> inv_worker
+    """Send and recieve cov_ema_dict (cov_worker -> inv_worker)
+
+    Args:
+        comm (chainermn._base.CommunicatorBase): Wrapped ChainerMN
+            communicator.
+        covs (list(numpy.array)): Send buffer or recv buffer of
+            covariance matrices.
     """
     is_sender = comm.is_cov_worker
     is_reciever = comm.is_inv_worker
