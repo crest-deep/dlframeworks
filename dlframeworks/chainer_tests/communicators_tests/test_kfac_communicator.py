@@ -88,9 +88,9 @@ class KFACCommunicatorTest(unittest.TestCase):
 
         if self.comm.is_cov_worker:
             for cov in covs:
-                self.assertTrue(np.all(cov == 1 / self.comm.ccomm.size),
+                self.assertTrue(np.all(cov == 1 ),
                                 'expected {} however {}'.format(
-                                    1 / self.comm.ccomm.size, cov[0]))
+                                    1 , cov[0]))
 
     def test_sendrecv_param(self):
         model = MLP()
