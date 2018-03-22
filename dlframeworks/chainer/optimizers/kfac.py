@@ -272,9 +272,15 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def setup(self, link):
         super(KFAC, self).setup(link)
-        linknames = [name for name, _ in sorted(link.namedparams())]
-        for i, dictionary in enumerate(self.dictionaries):
-            self.dictionaries[i] = collections.OrderedDict.fromkeys(linknames)
+        linknames = []
+        for linkname, sub_link in link.namedlinks():
+            if isinstance(link, chainer.links.Linear):
+                linknames.append(linkname)
+            elif isinstance(link, chainer.links.Convolution2D):
+                linknames.append(linkname)
+            else:
+                continue
+        self.linknames = sorted(linknames)
 
     def create_update_rule(self):
         return KFACUpdateRule(self.hyperparam)
