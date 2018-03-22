@@ -86,8 +86,8 @@ mpirun \\
   python ./main.py \\
     {train} \\
     {val} \\
-    --train_root {train_root} \\
-    --val_root {val_root} \\
+    --train-root {train_root} \\
+    --val-root {val_root} \\
     --arch {arch} \\
     --batchsize {batchsize} \\
     --epoch {epoch} \\
@@ -117,7 +117,7 @@ echo "Job ended on $(date)"
 
 def copy_code(dst, src='.'):
     ignore = shutil.ignore_patterns(
-        'README.md', '.gitignore', '.config')
+        'README.md', '.gitignore', '.config', 'result')
     shutil.copytree(src, dst, ignore=ignore)
 
 
