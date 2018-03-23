@@ -81,7 +81,7 @@ def _grads_cov_convolution_2d(grads):
 
 def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     acts_expand = im2col(acts, ksize, stride, pad).data
-    n, c, ho, wo = acts_expand.shape
+    n, _, ho, wo = acts_expand.shape
     acts_expand = acts_expand.transpose(0, 2, 3, 1)
     acts_expand = acts_expand.reshape(n*ho*wo, -1)
     return acts_expand
