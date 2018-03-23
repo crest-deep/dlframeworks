@@ -5,16 +5,20 @@ from chainer.functions import im2col
 import collections
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
-_default_hyperparam.lr = 0.01
+_default_hyperparam.lr = 0.001
 _default_hyperparam.momentum = 0.9
 _default_hyperparam.cov_ema_decay = 0.99
-_default_hyperparam.inv_freq = 1
-_default_hyperparam.damping = 0.001
+_default_hyperparam.inv_freq = 2
+_default_hyperparam.damping = 0.1
 
 _linear_function = \
     chainer.functions.connection.linear.LinearFunction
+_linear_link = \
+    chainer.links.connection.linear.Linear
 _convolution_2d_function = \
     chainer.functions.connection.convolution_2d.Convolution2DFunction
+_convolution_2d_link = \
+    chainer.links.connection.convolution_2d.Convolution2D
 
 
 def _cov_linear(xp, acts, grads, nobias):
@@ -34,40 +38,36 @@ def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     if not nobias:
-        # TODO `ho` and `wo`
-        ones = xp.ones(n*ho*wo)
+        ones = xp.ones(acts_expand.shape[0])
         acts_expand = xp.column_stack((acts_expand, ones))
     A = acts_expand.T.dot(acts_expand) / n
     G = _grads_cov_convolution_2d(grads)
     return [A, G]
 
 
-def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, ksize, stride,
-                                        pad):
+def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, ksize,
+                                        stride, pad):
     # Note that this method is called inside a with-statement of xp module
     n, _, _, _ = acts.shape
-    # TODO `stride`
     acts_expand = _acts_expand_convolution_2d(acts, ksize, strdie, pad)
-    # TODO `ho` and `wo`
     acts_expand = acts_expand.reshape(n, ho*wo, -1)
     u_expand = xp.zeros((n, ho*wo))
-    # TODO `c`
     v_expand = xp.zeros((n, c))
-    for i in range(n):
+    for i in range(n): 
         # TODO implement fast rank-1 approximation
         u, s, v = xp.linalg.svd(acts_expand[i])
         u1 = xp.sqrt(s[0]) * u[0]
         v1 = xp.sqrt(s[0]) * v.T[0]
-        u_expand[i] = u1
-        v_expand[i] = v1
+        u_expand[i] = u1 
+        v_expand[i] = v1 
     U = u_expand.T.dot(u_expand) / n
     V = v_expand.T.dot(v_expand) / n
     G = _grads_cov_convolution_2d(grads)
     if nobias:
         return [U, V, G]
     else:
-        b_grads = grads.sum(axis=(2, 3))
-        Fb = b_grads.T.dot(b_grads.T)  # full Fisher block for bias
+        b_grads = grads.sum(axis=(2,3))
+        Fb = b_grads.T.dot(b_grads.T) # full Fisher block for bias
         return [U, V, G, Fb]
 
 
@@ -145,7 +145,7 @@ def _kfac_grad_update(xp, param_W, param_b, invs):
         grad = grad.reshape(c_o, -1)
     if param_b is not None:
         grad = xp.column_stack([grad, param_b.grad])
-    kfgrads = (G_inv.T.dot(grad)).dot(A_inv).astype(grad.dtype)
+    kfgrads = xp.dot(xp.dot(G_inv, grad), A_inv).astype(grad.dtype)
     if param_b is not None:
         param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
         param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
@@ -272,11 +272,13 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def setup(self, link):
         super(KFAC, self).setup(link)
+        self.t_inv = 0
+        self.t_cov = 0
         linknames = []
         for linkname, sub_link in link.namedlinks():
-            if isinstance(link, chainer.links.Linear):
+            if isinstance(sub_link, _linear_link):
                 linknames.append(linkname)
-            elif isinstance(link, chainer.links.Convolution2D):
+            elif isinstance(sub_link, _convolution_2d_link):
                 linknames.append(linkname)
             else:
                 continue
@@ -306,6 +308,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         if comm is not None:
             if self.t % self.hyperparam.inv_freq == 1:
                 comm.sendrecv_param(self)
+                self.t_cov += 1
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -319,11 +322,15 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             # ======== Communication
             if comm is not None:
+                print(self.t)
                 synced = comm.allreduce_grad(self)
                 if not synced:
                     return
                 if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
+                    if self.t_inv == 0:
+                        self.inv_dict = self.allocate_matrices()
                     comm.bcast_inv(self.inv_dict)
+                    self.t_inv += 1
 
             for linkname, invs in self.inv_dict.items():
                 param_W = self.get_param(linkname + '/W')
@@ -353,10 +360,47 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return _param
         return None
 
+    def get_link(self, path):
+        for _name, _link in self.target.namedlinks():
+            if _name == path:
+                return _link
+        return None
+
+    def allocate_matrices(self):
+        dictionary = collections.OrderedDict()
+        for linkname in self.linknames:
+            link = self.get_link(linkname)
+            param_W = self.get_param(linkname + '/W')
+            param_b = self.get_param(linkname + '/b')
+            assert param_W is not None, 'W must be not None'
+            xp = cuda.get_array_module(param_W)
+            with cuda.get_device_from_array(param_W):
+                if isinstance(link, _linear_link):
+                    n_out, n_in = param_W.shape
+                    if param_b is not None:
+                        A = xp.empty((n_in + 1, n_in + 1))
+                    else:
+                        A = xp.empty((n_in, n_in))
+                    G = xp.empty((n_out, n_out))
+                elif isinstance(link, _convolution_2d_link):
+                    c_out, c_in, kh, kw = param_W.shape
+                    if param_b is not None:
+                        A = xp.empty((c_in*kh*kw + 1, c_in*kh*kw + 1))
+                    else:
+                        A = xp.empty((c_in*kh*kw, c_in*kh*kw))
+                    G = xp.empty((c_out, c_out))
+                else:
+                    continue
+            dictionary[linkname] = [A, G]
+        return collections.OrderedDict(
+            sorted(dictionary.items(), key=lambda x: x[0]))
+
+
     def cov_ema_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
+            print('cov:', self.t)
             comm.sendrecv_param(self)
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
@@ -368,6 +412,9 @@ class KFAC(chainer.optimizer.GradientMethod):
             # ======== Communication
             if comm is not None:
                 comm.sendrecv_cov_ema(self.cov_ema_dict)
+                self.t_inv += 1
+            self.t += 1
+            self.t_cov += 1
 
     def cov_ema_update_core(self, linkname):
         comm = self.communicator
@@ -405,15 +452,17 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
+            if self.t_inv == 0:
+                self.cov_ema_dict = self.allocate_matrices()
             comm.sendrecv_cov_ema(self.cov_ema_dict)
         for linkname, emas in self.cov_ema_dict.items():
             self.inv_update_core(linkname, emas)
+        self.t_inv += 1
         # ======== Communication
         if comm is not None:
             comm.bcast_inv(self.inv_dict)
 
     def inv_update_core(self, linkname, emas):
-        num_ema = len(emas)  # TODO Never used
         xp = cuda.get_array_module(*emas)
         with cuda.get_device_from_array(*emas):
 
