@@ -1,3 +1,5 @@
+import chainer
+from chainer.backends import cuda
 import chainermn
 from mpi4py import MPI
 import numpy as np
@@ -17,6 +19,45 @@ def _create_print_mpi(comm):
                 print(obj)
             comm.Barrier()
     return print_mpi
+
+
+class DummyLink(object):
+    """A dummy link that overrides `namedparams` method"""
+
+    def __init__(self, data):
+        self._params = {}
+        self._params['/'] = DummyParameter(data)
+
+    def namedparams(self):
+        for name, param in self._params.items():
+            yield name, param
+
+    @property
+    def data(self):
+        return self._params['/'].data
+
+
+class DummyParameter(object):
+    """A dummy link that overrides `grad` method"""
+
+    def __init__(self, data):
+        self._data = [data]
+
+    @property
+    def data(self):
+        return self._data[0]
+
+    @data.setter
+    def data(self, data):
+        self._data[0] = data
+
+    @property
+    def grad(self):
+        return self._data[0]
+
+    @grad.setter
+    def grad(self, data):
+        self._data[0] = data
 
 
 class KFACCommunicator(object):
@@ -45,8 +86,12 @@ class KFACCommunicator(object):
 
         if wcomm.size < 3:
             raise ValueError('Size of KFACCommunicator must be largaer than 2')
+        if npergroup < 1 or not isinstance(npergroup, int):
+            raise ValueError('Number of nodes per group must positive int')
 
         n_group = wcomm.inter_size // npergroup
+        if n_group == 0:
+            n_group = 1
         group_lst = np.array_split(np.arange(wcomm.size), n_group)
         is_cov_worker = 0
         is_inv_worker = 0
@@ -69,19 +114,24 @@ class KFACCommunicator(object):
                 else:
                     # Gradient worker
                     is_grad_worker = 1
+        if not (is_inv_worker | is_cov_worker | is_grad_worker):
+            # Gradient worker
+            is_grad_worker = 1
 
-        # Communicator for all covariance worker
+        # Communicator for all covariance workers
         ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
 
-        # Communicator for all gradient worker
+        # Communicator for all gradient workers
         gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
 
         # Communicator for inverse worker and gradient worker PER group
-        # color is different per group
-        color = group_id * (is_inv_worker & is_grad_worker)
-        # key is 0 for inverse worker and 1,2,... for gradient worker
+        color = group_id * (is_inv_worker | is_grad_worker)
         key = 0 if is_inv_worker else wcomm.rank + 1
         gcomm_g = wcomm.split(color=color, key=key)
+
+        ## Communicator for all gradient workers and covariance workers
+        color = is_cov_worker | is_grad_worker
+        gccomm = wcomm.split(color=color, key=wcomm.rank)
 
         send_buf = [is_inv_worker, is_cov_worker, is_grad_worker,
                     is_grad_master, wcomm.rank, wcomm.size, group_id]
@@ -114,6 +164,8 @@ class KFACCommunicator(object):
         super(KFACCommunicator, self).__setattr__(
             'gcomm_g', gcomm_g)
         super(KFACCommunicator, self).__setattr__(
+            'gccomm', gccomm)
+        super(KFACCommunicator, self).__setattr__(
             'is_inv_worker', is_inv_worker)
         super(KFACCommunicator, self).__setattr__(
             'is_cov_worker', is_cov_worker)
@@ -135,6 +187,127 @@ class KFACCommunicator(object):
 
     def __setattr__(self, name, value):
         setattr(self.gcomm, name, value)
+
+    def allreduce_grad(self, optimizer):
+        """Allreduce gradients calculated by backprop
+
+        Args:
+            optimizer (chainer.Optimizer): KFAC optimizer.
+        """
+        # If optimizer is a link object, then call original Allreduce
+        if not self.is_grad_worker:
+            return True
+        if isinstance(optimizer, chainer.Link):
+            self.gcomm.allreduce_grad(optimizer)
+            return True
+        if _is_changed(optimizer):
+            self.gcomm.broadcast_data(optimizer.target)
+            return False
+        else:
+            self.gcomm.allreduce_grad(optimizer.target)
+            return True
+
+    def bcast_inv(self, invs):
+        """Broadcast inverse matrices
+
+        Inverse worker sends A^-1 and G^-1 to all gradient workers.
+
+        Args:
+            invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or recieve
+                buffer of inverse matrices.
+        """
+        if not self.is_inv_worker or not self.is_grad_worker:
+            return
+        print('bcast_inv...')
+        for linkname, matrices in invs.items():
+            for i, matrix in enumerate(matrices):
+                matrix_link = DummyLink(matrix)
+                self.gcomm_g.broadcast_data(matrix_link)
+                invs[linkname][i] = matrix_link.data
+        print('bcast_inv done')
+
+    def allreduce_cov(self, covs):
+        """Allreduce covariance matrices
+
+        Args:
+            covs (list(numpy/cupy.array)): Send buffer or recv buffer of
+                covariance matrices.
+        """
+        if not self.is_cov_worker:
+            return
+        for i, matrix in enumerate(covs):
+            matrix_link = DummyLink(matrix)
+            self.ccomm.allreduce_grad(matrix_link)
+            covs[i] = matrix_link.data
+
+    def sendrecv_param(self, optimizer):
+        """Send or recieve parameters
+
+        Sender is gradient master and reciever is covariance worker.
+
+        Args:
+            optimizer (chainer.Optimizer): KFAC optimizer.
+        """
+        is_sender = self.is_grad_master
+        is_reciever = self.is_cov_worker
+
+        if is_sender:
+            for name, param in sorted(optimizer.target.namedparams()):
+                print(param.shape, 'sending', name)
+                data = param.data
+                data = chainer.cuda.to_cpu(data).astype(np.float32)
+                self.wcomm.send(data, self.cov_worker_rank, 0)
+            print('sendrecv_param done')
+        elif is_reciever:
+            for name, param in sorted(optimizer.target.namedparams()):
+                print(param.shape, 'recieving', name)
+                data = self.wcomm.recv(self.grad_master_rank, 0)
+                xp = cuda.get_array_module(param.data)
+                with cuda.get_device_from_array(param.data):
+                    param.data = xp.array(data)
+            print('sendrecv_param done')
+
+    def sendrecv_cov_ema(self, cov_emas):
+        """Send or recieve covariance EMAs
+
+        Sender is covariance worker and reciever is inverse worker.
+
+        Args:
+            cov_emas (dict(str, list(numpy/cupy.array))): Send buffer or
+                recieve buffer of covariance EMAs.
+        """
+        is_sender = self.is_cov_worker
+        is_reciever = self.is_inv_worker
+
+        if is_sender:
+            for _, matrices in sorted(cov_emas.items()):
+                for matrix in matrices:
+                    matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                    self.wcomm.send(matrix, self.inv_worker_rank, 0)
+            print('sendrecv_cov_ema sending done')
+        elif is_reciever:
+            print('start recieving .... sendrecv_cov_ema')
+            for linkname, matrices in sorted(cov_emas.items()):
+                for i, matrix in enumerate(matrices):
+                    data = self.wcomm.recv(self.cov_worker_rank, 0)
+                    xp = cuda.get_array_module(matrix)
+                    with cuda.get_device_from_array(matrix):
+                        del matrix
+                        cov_emas[linkname][i] = xp.array(data)
+            print('sendrecv_cov_ema recieving done')
+
+
+def _is_changed(optimizer):
+    target = optimizer.target
+    previous_params = optimizer.target_params
+    optimizer.target_params = [(name, param.data is not None)
+                               for name, param in sorted(target.namedparams())]
+    if len(previous_params) != len(optimizer.target_params):
+        return True
+    for param1, param2 in zip(optimizer.target_params, previous_params):
+        if (param1[0] != param2[0]) or (param1[1] != param2[1]):
+            return True
+    return False
 
 
 if __name__ == '__main__':
