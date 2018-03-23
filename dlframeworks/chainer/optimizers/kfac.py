@@ -3,11 +3,11 @@ from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
 
-#from dlframeworks.chainer.communicators.kfac_communicator import allreduce_cov
-#from dlframeworks.chainer.communicators.kfac_communicator import allreduce_grad
-#from dlframeworks.chainer.communicators.kfac_communicator import bcast_inv
-#from dlframeworks.chainer.communicators.kfac_communicator import sendrecv_cov_ema
-#from dlframeworks.chainer.communicators.kfac_communicator import sendrecv_param
+from dlframeworks.chainer.communicators.kfac_communicator import allreduce_cov
+from dlframeworks.chainer.communicators.kfac_communicator import allreduce_grad
+from dlframeworks.chainer.communicators.kfac_communicator import bcast_inv
+from dlframeworks.chainer.communicators.kfac_communicator import sendrecv_cov_ema
+from dlframeworks.chainer.communicators.kfac_communicator import sendrecv_param
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
@@ -48,9 +48,9 @@ def _cov_convolution_2d(xp, acts, grads, nobias, \
 def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, \
                                             ksize, stride, pad):
     # Note that this method is called inside a with-statement of xp module
-    n, c, ho, wo = acts.shape
+    n, c, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
-    acts_expand = acts_expand.reshape(n*ho*wo, ksize*kszie, -1)
+    acts_expand = acts_expand.reshape(n*ho*wo, ksize*ksize, -1)
     u_expand = xp.zeros((n, ksize*ksize))
     v_expand = xp.zeros((n, c))
     for i in range(n): 
