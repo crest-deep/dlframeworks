@@ -38,7 +38,7 @@ def _cov_convolution_2d(xp, acts, grads, nobias, \
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     if not nobias:
-        ones = xp.ones(n*ho*wo)
+        ones = xp.ones(acts_expand.shape[0])
         acts_expand = xp.column_stack((acts_expand, ones))
     A = acts_expand.T.dot(acts_expand) / n
     G = _grads_cov_convolution_2d(grads)
