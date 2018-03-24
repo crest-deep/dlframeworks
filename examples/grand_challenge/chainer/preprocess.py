@@ -135,7 +135,6 @@ echo $LD_LIBRARY_PATH | tr ":" "\\n"
 echo "-------------------------------------------------"
 echo ""
 echo "---------------- Python ----------------"
-pyenv version
 python --version
 echo "----------------------------------------"
 echo ""
@@ -180,6 +179,13 @@ mpirun \\
   -mca pml ob1 \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
+  -x LD_LIBRARY_PATH \\
+  -x CUDA_CACHE_DISABLE \\
+  -x CUDA_HOME \\
+  -x CUDA_PATH \\
+  -x CUDA_TOP \\
+  -x NCCL_IB_CUDA_SUPPORT \\
+  -x NCCL_IB_SL \\
 """.format(**options)
     else:
         raise ValueError('No MPI implementation supported: {}'.format(
