@@ -83,6 +83,13 @@ mpirun \\
   -mca pml ob1 \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
+  -x LD_LIBRARY_PATH \\
+  -x CUDA_CACHE_DISABLE \\
+  -x CUDA_HOME \\
+  -x CUDA_PATH \\
+  -x CUDA_TOP \\
+  -x NCCL_IB_CUDA_SUPPORT \\
+  -x NCCL_IB_SL \\
   python ./main.py \\
     {train} \\
     {val} \\

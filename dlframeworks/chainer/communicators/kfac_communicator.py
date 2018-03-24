@@ -1,7 +1,6 @@
 import chainer
 from chainer.backends import cuda
 import chainermn
-from mpi4py import MPI
 import numpy as np
 
 
@@ -67,16 +66,20 @@ class KFACCommunicator(object):
     test on local machine run with more than 4 processes.
 
     Args:
-        mpi_comm: MPI4py communicator
         communicator_name: The name of communicator (``naive``, ``flat``,
           ``hierarchical``, ``two_dimensional``, ``pure_nccl``, or
           ``single_node``)
+        mpi_comm: MPI4py communicator
         npergroup (int): Number of nodes per group.
         debug (bool): Print debug message or not.
     """
 
-    def __init__(self, mpi_comm, communicator_name='hierarchical', npergroup=1,
-                 debug=False):
+    def __init__(self, communicator_name='hierarchical', mpi_comm=None,
+                 npergroup=1, debug=False):
+        if mpi_comm is None:
+            import mpi4py.MPI
+            mpi_comm = mpi4py.MPI.COMM_WORLD
+
         if debug:
             print_mpi = _create_print_mpi(mpi_comm)
 
@@ -311,5 +314,4 @@ def _is_changed(optimizer):
 
 
 if __name__ == '__main__':
-    comm = KFACCommunicator(MPI.COMM_WORLD, communicator_name='naive',
-                            debug=True)
+    comm = KFACCommunicator(communicator_name='naive', debug=True)
