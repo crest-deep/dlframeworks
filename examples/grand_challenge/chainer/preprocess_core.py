@@ -2,6 +2,7 @@ import json
 import datetime
 import os
 from socket import gethostname
+import shutil
 import yaml
 
 
@@ -82,4 +83,10 @@ def get_npernode(options):
 def get_np(options):
     npernode = get_npernode(options)
     return npernode * options['nnodes']
+
+
+def copy_code(dst, src='.'):
+    ignore = shutil.ignore_patterns(
+        'README.md', '.gitignore', '.config', 'result', '__pycache__')
+    shutil.copytree(src, dst, ignore=ignore)
 

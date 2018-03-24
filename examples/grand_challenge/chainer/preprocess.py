@@ -115,26 +115,32 @@ echo "Job ended on $(date)"
     return shell_script
 
 
-def copy_code(dst, src='.'):
-    ignore = shutil.ignore_patterns(
-        'README.md', '.gitignore', '.config', 'result')
-    shutil.copytree(src, dst, ignore=ignore)
-
-
 def main():
-    options = preprocess_core.load_options('config.yaml')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--config', default='config.yaml')
+    parser.add_argument('-o', '--out', default='main.sh')
+    args = parser.parse_args()
+
+    options = preprocess_core.load_options(args.config)
     options['time'] = preprocess_core.get_time()
-    options['result_direcory'] = os.path.join(options['out'], options['time'])
-    options['working_direcory'] = os.path.join(options['result_direcory'],
-                                               'code')
+    options['working_direcory'] = os.path.join(options['out'], options['time'])
+    options['result_direcory'] = os.path.join(options['working_direcory'],
+                                              'result')
     options['np'] = preprocess_core.get_np(options)
     options['npernode'] = preprocess_core.get_npernode(options)
+
     shell_script = parse_options(options)
-    with open('main.sh', 'w') as f:
+
+    with open(args.out, 'w') as f:
         f.write(shell_script)
-    dst = os.path.join(options['out'], options['time'], 'code')
-    copy_code(dst)
-    print(os.path.join(dst, 'main.sh'))  # Stdout is passed to `submit` script.
+
+    src_dst = options['working_direcory']
+    preprocess_core.copy_code(src_dst)
+
+    log_dst = options['result_direcory']
+    os.makedirs(log_dst, exist_ok=True)
+
+    print(os.path.join(src_dst, args.out))  # Stdout is passed to `submit` script.
 
 
 if __name__ == '__main__':
