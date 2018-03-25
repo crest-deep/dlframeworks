@@ -5,9 +5,10 @@ import numpy as np
 
 
 def _create_print_mpi(comm):
+    import mpi4py.MPI
     rank = comm.rank
     size = comm.size
-    host = MPI.Get_processor_name()
+    host = mpi4py.MPI.Get_processor_name()
     digits = len(str(size - 1))
     prefix = '[{{:0{}}}/{}:{}] '.format(digits, size, host).format(rank)
 
@@ -154,9 +155,12 @@ class KFACCommunicator(object):
                     grad_master_rank = flags[4]
 
         if debug:
-            print_mpi('[{}{}{}{}{}{}:{}]'.format(
-                is_inv_worker, is_cov_worker, is_grad_worker, is_grad_master,
-                wcomm.rank, wcomm.size, group_id))
+            print_mpi('[{}{}{}{}:{}]'.format(
+                is_inv_worker,
+                is_cov_worker,
+                is_grad_worker,
+                is_grad_master,
+                group_id))
 
         super(KFACCommunicator, self).__setattr__(
             'wcomm', wcomm)
