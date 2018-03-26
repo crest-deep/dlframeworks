@@ -128,12 +128,12 @@ class KFACCommunicator(object):
         # Communicator for all gradient workers
         gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
 
-        # Communicator for inverse worker and gradient worker PER group
-        color = group_id * (is_inv_worker | is_grad_worker)
+        # Communicator for inverse worker and gradient master PER group
+        color = (group_id + 1) * (is_inv_worker | is_grad_worker)
         key = 0 if is_inv_worker else wcomm.rank + 1
         gcomm_g = wcomm.split(color=color, key=key)
 
-        ## Communicator for all gradient workers and covariance workers
+        # Communicator for all gradient workers and covariance workers
         color = is_cov_worker | is_grad_worker
         gccomm = wcomm.split(color=color, key=wcomm.rank)
 
@@ -220,18 +220,17 @@ class KFACCommunicator(object):
         Inverse worker sends A^-1 and G^-1 to all gradient workers.
 
         Args:
-            invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or recieve
-                buffer of inverse matrices.
+            invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
+                recieve buffer of inverse matrices.
         """
-        if not self.is_inv_worker or not self.is_grad_worker:
+        if not self.is_inv_worker and not self.is_grad_worker:
             return
-        print('bcast_inv...')
-        for linkname, matrices in invs.items():
+        for linkname, matrices in sorted(invs.items()):
             for i, matrix in enumerate(matrices):
                 matrix_link = DummyLink(matrix)
                 self.gcomm_g.broadcast_data(matrix_link)
                 invs[linkname][i] = matrix_link.data
-        print('bcast_inv done')
+            self.gcomm_g.mpi_comm.Barrier()
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -260,19 +259,15 @@ class KFACCommunicator(object):
 
         if is_sender:
             for name, param in sorted(optimizer.target.namedparams()):
-                print(param.shape, 'sending', name)
                 data = param.data
                 data = chainer.cuda.to_cpu(data).astype(np.float32)
                 self.wcomm.send(data, self.cov_worker_rank, 0)
-            print('sendrecv_param done')
         elif is_reciever:
             for name, param in sorted(optimizer.target.namedparams()):
-                print(param.shape, 'recieving', name)
                 data = self.wcomm.recv(self.grad_master_rank, 0)
                 xp = cuda.get_array_module(param.data)
                 with cuda.get_device_from_array(param.data):
                     param.data = xp.array(data)
-            print('sendrecv_param done')
 
     def sendrecv_cov_ema(self, cov_emas):
         """Send or recieve covariance EMAs
@@ -291,9 +286,7 @@ class KFACCommunicator(object):
                 for matrix in matrices:
                     matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
                     self.wcomm.send(matrix, self.inv_worker_rank, 0)
-            print('sendrecv_cov_ema sending done')
         elif is_reciever:
-            print('start recieving .... sendrecv_cov_ema')
             for linkname, matrices in sorted(cov_emas.items()):
                 for i, matrix in enumerate(matrices):
                     data = self.wcomm.recv(self.cov_worker_rank, 0)
@@ -301,7 +294,6 @@ class KFACCommunicator(object):
                     with cuda.get_device_from_array(matrix):
                         del matrix
                         cov_emas[linkname][i] = xp.array(data)
-            print('sendrecv_cov_ema recieving done')
 
 
 def _is_changed(optimizer):

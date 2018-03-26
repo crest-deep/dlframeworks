@@ -276,6 +276,9 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
+    cov_ema_decay = optimizer.HyperparameterProxy('cov_ema_decay')
+    inv_freq = optimizer.HyperparameterProxy('inv_freq')
+    damping = optimizer.HyperparameterProxy('damping')
 
     def setup(self, link):
         super(KFAC, self).setup(link)
@@ -329,7 +332,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             # ======== Communication
             if comm is not None:
-                print(self.t)
                 synced = comm.allreduce_grad(self)
                 if not synced:
                     return
@@ -407,7 +409,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
-            print('cov:', self.t)
             comm.sendrecv_param(self)
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
