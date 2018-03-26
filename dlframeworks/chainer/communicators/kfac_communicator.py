@@ -96,7 +96,7 @@ class KFACCommunicator(object):
         n_group = wcomm.inter_size // npergroup
         if n_group == 0:
             n_group = 1
-        group_lst = np.array_split(np.arange(wcomm.size), n_group)
+        group_lst = np.array_split(np.arange(wcomm.inter_size), n_group)
         is_cov_worker = 0
         is_inv_worker = 0
         is_grad_worker = 0
