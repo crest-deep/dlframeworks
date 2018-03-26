@@ -46,6 +46,9 @@ def parse_options(options):
 . ${{HOME}}/.local/modules.sh
 
 """.format(**options)
+
+    for k, v in options['modules'].items():
+        shell_script += 'module load {}\n'.format(v)
     
     shell_script += """\
 source ./modules.sh
