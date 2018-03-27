@@ -39,7 +39,7 @@ def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
     # Note that this method is called inside a with-statement of xp module
     n, _, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d( \
-                    acts, ksize, stride, pad) # (n*ho*wo x c*ksize*ksize)
+                    acts, ksize, stride, pad) # n*ho*wo x c*ksize*ksize
     if not nobias:
         ones = xp.ones(acts_expand.shape[0])
         acts_expand = xp.column_stack((acts_expand, ones))
@@ -51,24 +51,27 @@ def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
 def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, ksize,
                                         stride, pad):
     # Note that this method is called inside a with-statement of xp module
-    _, c, _, _ = acts.shape
+    n, c, _, _ = acts.shape
     acts_expand = _acts_expand_convolution_2d( \
-                    acts, ksize, stride, pad) # (n*ho*wo, c*ksize*ksize)
-    acts_expand = acts_expand.reshape(-1, ksize*ksize, c)
-#    u_expand = xp.empty((acts_expand.shape[0], ksize*ksize))
-#    v_expand = xp.empty((acts_expand.shape[0], c))
-#    for i in range(acts_expand.shape[0]): 
-#        print ('{0}/{1}'.format(i, acts_expand.shape[0]))
-#        array = acts_expand[i]
-#        u1, v1 = _rank1_approximation(xp, array)
-#        u_expand[i] = u1
-#        v_expand[i] = v1.T
-#    U = u_expand.T.dot(u_expand) / acts_expand.shape[0]
-#    V = v_expand.T.dot(v_expand) / acts_expand.shape[0]
-    acts_expand_mean = acts_expand.mean(axis=0)
-    u1, v1 = _rank1_approximation(xp, acts_expand_mean)
-    U = xp.outer(u1, u1)
-    V = xp.outer(v1, v1)
+                    acts, ksize, stride, pad) # n*ho*wo x c*ksize*ksize
+    acts_expand = acts_expand.reshape(-1, c, ksize*ksize) 
+    acts_expand = acts_expand.transpose(0, 2, 1) # n*ho*wo x ksize*ksize x c
+    acts_expand = acts_expand.reshape(n, -1, ksize*ksize, c)
+    u_expand = xp.empty((n, ksize*ksize))
+    v_expand = xp.empty((n, c))
+    for i in range(n): 
+        array = acts_expand[i].sum(axis=0) # ksize*ksize x c
+        u1, v1 = _rank1_approximation(xp, array)
+        u_expand[i] = u1
+        v_expand[i] = v1.T
+    U = u_expand.T.dot(u_expand) / n
+    V = v_expand.T.dot(v_expand) / n
+
+#    acts_expand_mean = acts_expand.mean(axis=0)
+#    u1, v1 = _rank1_approximation(xp, acts_expand_mean)
+#    U = xp.outer(u1, u1) / n
+#    V = xp.outer(v1, v1) / n 
+
     G = _grads_cov_convolution_2d(grads)
     if nobias:
         return [U, V, G]
@@ -102,7 +105,7 @@ def _rank1_approximation(xp, arr):
     if m < n: arr = arr.T
     U, D, V = _rsvd(xp, arr, k=1, p=10)
     s = D[0][0]
-    u1 = xp.sqrt(s) * U
+    u1 = xp.sqrt(s) * U.reshape(-1)
     v1 = xp.sqrt(s) * V[0][:]
     if m < n: 
         return v1.T, u1.T
@@ -471,8 +474,8 @@ class KFAC(chainer.optimizer.GradientMethod):
             if comm is not None:
                 comm.sendrecv_cov_ema(self.cov_ema_dict)
                 self.t_inv += 1
-            self.t += 1
             self.t_cov += 1
+
 
     def cov_ema_update_core(self, linkname):
         comm = self.communicator
@@ -505,6 +508,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             self.cov_ema_dict[linkname] = cov_emas
         else:
             self.cov_ema_dict[linkname] = covs
+
 
     def inv_update(self):
         comm = self.communicator
