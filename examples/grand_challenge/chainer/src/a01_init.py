@@ -1,6 +1,8 @@
 import chainer
 import chainermn
 
+import dlframeworks
+
 
 def parse_args(parser, archs):
     parser.add_argument('train')

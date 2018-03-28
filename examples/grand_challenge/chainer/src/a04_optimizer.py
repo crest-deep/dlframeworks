@@ -13,7 +13,7 @@ def get_optimizer(args, comm, model):
         actual_optimizer = dlframeworks.chainer.optimizers.RMSpropWarmup()
     else:
         actual_optimizer = chainer.optimizers.RMSprop()
-
-    optimizer = chainermn.create_multi_node_optimizer(actual_optimizer, comm)
+    optimizer = chainermn.create_multi_node_optimizer(
+        actual_optimizer, comm)
     optimizer.setup(model)
     return optimizer

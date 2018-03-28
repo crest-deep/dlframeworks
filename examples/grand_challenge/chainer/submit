@@ -1,5 +1,11 @@
 #!/bin/bash
 set -eu
 
-jobscript=$(python preprocess.py)
-qsub -g tgc-ebdcrest ${jobscript}
+
+if [[ "$(hostname)" = *kfc* ]]; then
+  jobscript=$(python preprocess.py --config=config_kfc.yaml)
+  sbatch ${jobscript}
+else
+  jobscript=$(python preprocess.py --config=config_t3.yaml)
+  qsub -g tgc-ebdcrest ${jobscript}
+fi

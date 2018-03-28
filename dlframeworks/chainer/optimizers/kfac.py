@@ -350,6 +350,9 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
+    cov_ema_decay = optimizer.HyperparameterProxy('cov_ema_decay')
+    inv_freq = optimizer.HyperparameterProxy('inv_freq')
+    damping = optimizer.HyperparameterProxy('damping')
 
     def setup(self, link):
         super(KFAC, self).setup(link)
@@ -455,9 +458,10 @@ class KFAC(chainer.optimizer.GradientMethod):
             link = self.get_link(linkname)
             param_W = self.get_param(linkname + '/W')
             param_b = self.get_param(linkname + '/b')
-            assert param_W is not None, 'W must be not None'
-            xp = cuda.get_array_module(param_W)
-            with cuda.get_device_from_array(param_W):
+            if param_W is None:
+                raise ValueError('param_W MUST not be None at', linkname)
+            xp = cuda.get_array_module(param_W.data)
+            with cuda.get_device_from_array(param_W.data):
                 if isinstance(link, _linear_link):
                     n_out, n_in = param_W.shape
                     if param_b is not None:
@@ -483,14 +487,15 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
-            print('cov:', self.t)
             comm.sendrecv_param(self)
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, \
                 self.conv_args_dict = _kfac_backward(loss, self.target)
+            del loss
 
-            for linkname in self.rank_dict.keys():
+            n = len(self.rank_dict)
+            for i, linkname in enumerate(self.rank_dict.keys()):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
             if comm is not None:
