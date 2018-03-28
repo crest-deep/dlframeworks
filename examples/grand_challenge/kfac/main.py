@@ -18,15 +18,6 @@ import models_v2.nin as nin
 import models_v2.resnet50 as resnet50
 
 
-class DummyDataset(dataset_mixin.DatasetMixin):
-
-    def __len__(self):
-        return np.inf
-
-    def get_example(self, i):
-        return np.arange(64, dtype=np.float32)
-
-
 def observe_hyperparam(name, trigger):
     """
     >>> trainer.extend(observe_hyperparam('alpha', (1, 'epoch')))

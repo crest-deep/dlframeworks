@@ -6,11 +6,6 @@ import dlframeworks
 
 
 def get_dataset(args, comm, model):
-    if args.optimizer == 'kfac':
-        if comm.is_inv_worker:
-            return DummyDataset()
-        comm = comm.gccomm
-
     mean = np.load(args.mean)
     if args.loadtype == 'development':
         if comm.rank == 0:
@@ -28,12 +23,3 @@ def get_dataset(args, comm, model):
     else:
         raise NotImplementedError('Invalid loadtype: {}'.format(args.loadtype))
     return train, val
-
-
-class DummyDataset(dataset_mixin.DatasetMixin):
-
-    def __len__(self):
-        return 0
-
-    def get_example(self, i):
-        return None

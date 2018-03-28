@@ -29,13 +29,8 @@ def parse_args(parser, archs):
 
 
 def initialize(args, archs):
-    if args.optimizer == 'kfac':
-        comm = dlframeworks.chainer.communicators.KFACCommunicator(
-            args.communicator)
-        device = comm.wcomm.intra_rank
-    else:
-        comm = chainermn.create_communicator(args.communicator)
-        device = comm.intra_rank
+    comm = chainermn.create_communicator(args.communicator)
+    device = comm.intra_rank
     chainer.cuda.get_device(device).use()
     model = archs[args.arch]()
     model.to_gpu()

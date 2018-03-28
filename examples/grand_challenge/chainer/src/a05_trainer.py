@@ -8,11 +8,6 @@ import dlframeworks
 
 def get_trainer(args, comm, model, device, train_iterator, val_iterator,
                 optimizer):
-    if args.optimizer == 'kfac':
-        if comm.is_inv_worker:
-            train_iterator = [None]
-            val_iterator = [None]
-
     updater = training.StandardUpdater(train_iterator, optimizer,
                                        device=device)
     trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
