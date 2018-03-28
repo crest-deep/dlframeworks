@@ -1,10 +1,13 @@
+import collections
+import heapq
+
+import numpy
+
 import chainer
 from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
-import collections
 
-import numpy as np
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.001
@@ -56,21 +59,22 @@ def _cov_convolution_2d_doubly_factored(xp, acts, grads, nobias, ksize,
                     acts, ksize, stride, pad) # n*ho*wo x c*ksize*ksize
     acts_expand = acts_expand.reshape(-1, c, ksize*ksize) 
     acts_expand = acts_expand.transpose(0, 2, 1) # n*ho*wo x ksize*ksize x c
-    acts_expand = acts_expand.reshape(n, -1, ksize*ksize, c)
-    u_expand = xp.empty((n, ksize*ksize))
-    v_expand = xp.empty((n, c))
-    for i in range(n): 
-        array = acts_expand[i].sum(axis=0) # ksize*ksize x c
-        u1, v1 = _rank1_approximation(xp, array)
-        u_expand[i] = u1
-        v_expand[i] = v1.T
-    U = u_expand.T.dot(u_expand) / n
-    V = v_expand.T.dot(v_expand) / n
 
-#    acts_expand_mean = acts_expand.mean(axis=0)
-#    u1, v1 = _rank1_approximation(xp, acts_expand_mean)
-#    U = xp.outer(u1, u1) / n
-#    V = xp.outer(v1, v1) / n 
+#    acts_expand = acts_expand.reshape(n, -1, ksize*ksize, c)
+#    u_expand = xp.empty((n, ksize*ksize))
+#    v_expand = xp.empty((n, c))
+#    for i in range(n): 
+#        array = acts_expand[i].sum(axis=0) # ksize*ksize x c
+#        u1, v1 = _rank1_approximation(xp, array)
+#        u_expand[i] = u1
+#        v_expand[i] = v1.T
+#    U = u_expand.T.dot(u_expand) / n
+#    V = v_expand.T.dot(v_expand) / n
+
+    array = acts_expand.sum(axis=0)
+    u1, v1 = _rank1_approximation(xp, array)
+    U = xp.outer(u1, u1) / n
+    V = xp.outer(v1, v1) / n 
 
     G = _grads_cov_convolution_2d(grads)
     if nobias:
@@ -139,15 +143,10 @@ def _rsvd(xp, arr, k, p):
 
 
 def _kfac_backward(loss, chain):
-    namedparams = list(chain.namedparams())
+    if loss.creator_node is None:
+        return
 
-    def get_linkname(param):
-        # Get a linkname from a parameter.
-        for _name, _param in namedparams:
-            if param is _param:
-                # Only return linkname NOT paramname.
-                return _name[:_name.rfind('/')]
-        return None
+    namedparams = list(chain.namedparams())
 
     acts_dict = {}
     grads_dict = {}
@@ -157,8 +156,26 @@ def _kfac_backward(loss, chain):
     output_vars = []
     linknames = []
 
-    func_node = loss.creator_node
-    while func_node:
+    cand_funcs = []
+    seen_set = set()
+
+    def get_linkname(param):
+        # Get a linkname from a parameter.
+        for _name, _param in namedparams:
+            if param is _param:
+                # Only return linkname NOT paramname.
+                return _name[:_name.rfind('/')]
+        return None
+
+    def add_cand(cand):
+       if cand not in seen_set:
+           heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
+           seen_set.add(cand)
+
+    add_cand(loss.creator_node)
+
+    while cand_funcs:
+        _, _, func_node = heapq.heappop(cand_funcs)
         if isinstance(func_node, _linear_function) \
           or isinstance(func_node, _convolution_2d_function):
             (acts_var, param) = func_node.get_retained_inputs()
@@ -177,8 +194,9 @@ def _kfac_backward(loss, chain):
                 _, _, ksize, _ = param.data.shape
                 conv_args_dict[linkname] = ksize, stride, pad
 
-        input_var_node = func_node.inputs[0]
-        func_node = input_var_node.creator_node
+        for x in func_node.inputs:
+            if x.creator_node is not None:
+                add_cand(x.creator_node)
 
     # backprop
     grads_vars = chainer.grad([loss], output_vars)
@@ -536,7 +554,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             
             def inv_3factors(ema):
                 dmp = xp.identity(ema.shape[0]) * \
-                  np.cbrt(self.hyperparam.damping) # cupy doesn't have cbrt()
+                  numpy.cbrt(self.hyperparam.damping) # cupy doesn't have cbrt()
                 return inv(ema + dmp)
 
             def inv(X):
