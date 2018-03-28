@@ -86,7 +86,7 @@ class CroppingDataset(chainer.dataset.DatasetMixin):
         labels = []
         for (path, label) in self._pairs:
             path = os.path.join(self._root, path)
-            images.append(_read_image(path, self.crop_h, self.crop_w,
+            images.append(_read_image(path, self._crop_h, self._crop_w,
                                       self._image_dtype))
             labels.append(label)
         labels = np.array(labels, dtype=self._label_dtype)
@@ -145,6 +145,7 @@ class CroppingDatasetIO(chainer.dataset.DatasetMixin):
         crop_h = self._crop_h
         crop_w = self._crop_w
         path, label = self._pairs[i]
+        path = os.path.join(self._root, path)
         image = _read_image(path, crop_h, crop_w, self._image_dtype)
         mean = self._mean
         if image.ndim == 2:

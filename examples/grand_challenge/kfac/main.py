@@ -6,6 +6,7 @@ from chainer.dataset import dataset_mixin
 from chainer.training import extensions
 import chainermn
 import multiprocessing
+import cupy as cp
 import numpy as np
 
 import dlframeworks
@@ -23,7 +24,7 @@ class DummyDataset(dataset_mixin.DatasetMixin):
         return np.inf
 
     def get_example(self, i):
-        return np.array([0], dtype=np.float32)
+        return np.arange(64, dtype=np.float32)
 
 
 def observe_hyperparam(name, trigger):
@@ -82,12 +83,19 @@ def main():
     args = parser.parse_args()
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
-        args.communicator)
+        args.communicator, debug=True)
+    print(comm.wcomm.rank, comm.wcomm.intra_rank)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device(device).use()
 
     model = archs[args.arch]()
+    # Initialize weights -> needed 
+    x = np.zeros((1, 3, model.insize, model.insize), dtype=np.float32)
+    t = np.zeros((1,), dtype=np.int32)
+    model(x, t)
+
     model.to_gpu()
+    print('>>>>>>>>', comm.wcomm.rank, comm.wcomm.intra_rank, 'Allocated! <<<<<<<<')
 
     if comm.wcomm.mpi_comm.rank == 0:
         print('==========================================')
@@ -101,116 +109,103 @@ def main():
         print('Load model from', args.initmodel)
         chainer.serializers.load_npz(args.initmodel, model)
 
-    if comm.is_grad_worker:
-        # Gradient worker
+    if comm.is_grad_worker or comm.is_cov_worker:
+        if comm.is_grad_worker:
+            # Gradient worker
+            # Load all dataset in memory
+            #dataset_class = dlframeworks.chainer.datasets.CroppingDataset
+            dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
+            sub_comm = comm.gcomm
+        else:
+            # Covariance worker
+            # Load dataset in memory when needed
+            dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
+            sub_comm = comm.ccomm
+
         mean = np.load(args.mean)
-        if args.loadtype == 'development':
+
+        # ======== Create dataset ========
+        if comm.gcomm.rank == 0 or comm.ccomm.rank == 0:
+            train = dlframeworks.chainer.datasets.read_pairs(args.train)
+            val = dlframeworks.chainer.datasets.read_pairs(args.val)
+        else:
+            train = None
+            val = None
+        train = chainermn.scatter_dataset(train, sub_comm, shuffle=True)
+        val = chainermn.scatter_dataset(val, sub_comm)
+        train_dataset = dataset_class(
+            train, args.train_root, mean, model.insize, model.insize)
+        val_dataset = dataset_class(
+            val, args.val_root, mean, model.insize, model.insize)
+
+        # ======== Create iterator ========
+        if args.iterator == 'process':
+            multiprocessing.set_start_method('forkserver')
+            train_iterator = chainer.iterators.MultiprocessIterator(
+                train_dataset, args.batchsize, n_processes=args.loaderjob)
+            val_iterator = chainer.iterators.MultiprocessIterator(
+                val_dataset, args.val_batchsize, n_processes=args.loaderjob,
+                repeat=False)
+        elif args.iterator == 'thread':
+            train_iterator = chainer.iterators.MultithreadIterator(
+                train_dataset, args.batchsize, n_threads=args.loaderjob)
+            val_iterator = chainer.iterators.MultithreadIterator(
+                val_dataset, args.val_batchsize, n_threads=args.loaderjob,
+                repeat=False)
+        else:
+            train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
+            val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
+                                                            repeat=False, shuffle=False)
+
+        # ======== Create optimizer ========
+        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
+        optimizer.setup(model)
+
+        # ======== Create updater ========
+        updater = training.StandardUpdater(train_iterator, optimizer,
+                                           device=device)
+
+        # ======== Create trainer ========
+        trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
+
+        # ======== Extend trainer ========
+        val_interval = (10, 'iteration') if args.test else (1, 'epoch')
+        log_interval = (10, 'iteration') if args.test else (1, 'epoch')
+        if comm.is_grad_worker:
+            # Only gradient worker needs to join this extension
+            # Evaluator
+            evaluator = TestModeEvaluator(val_iterator, model, device=device)
+            evaluator = chainermn.create_multi_node_evaluator(evaluator, comm.gcomm)
+            trainer.extend(evaluator, trigger=val_interval)
+
+            # Some display and output extensions are necessary only for one worker.
+            # (Otherwise, there would just be repeated outputs.)
             if comm.gcomm.rank == 0:
-                train = dlframeworks.chainer.datasets.read_pairs(args.train)
-                val = dlframeworks.chainer.datasets.read_pairs(args.val)
-            else:
-                train = None
-                val = None
-            train = chainermn.scatter_dataset(train, comm.gcomm, shuffle=True)
-            val = chainermn.scatter_dataset(val, comm.gcomm)
-            train_dataset = dlframeworks.chainer.datasets.CroppingDataset(
-                train, args.train_root, mean, model.insize, model.insize)
-            val_dataset = dlframeworks.chainer.datasets.CroppingDataset(
-                val, args.val_root, mean, model.insize, model.insize)
-        else:
-            raise NotImplementedError('Invalid loadtype: {}'.format(args.loadtype))
-        if args.iterator == 'process':
-            multiprocessing.set_start_method('forkserver')
-            train_iterator = chainer.iterators.MultiprocessIterator(
-                train_dataset, args.batchsize, n_processes=args.loaderjob)
-            val_iterator = chainer.iterators.MultiprocessIterator(
-                val_dataset, args.val_batchsize, n_processes=args.loaderjob,
-                repeat=False)
-        elif args.iterator == 'thread':
-            train_iterator = chainer.iterators.MultithreadIterator(
-                train_dataset, args.batchsize, n_threads=args.loaderjob)
-            val_iterator = chainer.iterators.MultithreadIterator(
-                val_dataset, args.val_batchsize, n_threads=args.loaderjob,
-                repeat=False)
-        else:
-            train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
-            val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
-                                                            repeat=False, shuffle=False)
-    elif comm.is_cov_worker:
-        # Covariance worker
-        mean = np.load(args.mean)
-        if args.loadtype == 'development':
-            if comm.ccomm.rank == 0:
-                train = dlframeworks.chainer.datasets.read_pairs(args.train)
-                val = dlframeworks.chainer.datasets.read_pairs(args.val)
-            else:
-                train = None
-                val = None
-            train = chainermn.scatter_dataset(train, comm.ccomm, shuffle=True)
-            val = chainermn.scatter_dataset(val, comm.ccomm)
-            train_dataset = dlframeworks.chainer.CroppingDatasetIO(
-                train, args.train_root, mean, model.insize, model.insize)
-            val_dataset = dlframeworks.chainer.CroppingDatasetIO(
-                val, args.val_root, mean, model.insize, model.insize)
-        else:
-            raise NotImplementedError('Invalid loadtype: {}'.format(args.loadtype))
-        if args.iterator == 'process':
-            multiprocessing.set_start_method('forkserver')
-            train_iterator = chainer.iterators.MultiprocessIterator(
-                train_dataset, args.batchsize, n_processes=args.loaderjob)
-            val_iterator = chainer.iterators.MultiprocessIterator(
-                val_dataset, args.val_batchsize, n_processes=args.loaderjob,
-                repeat=False)
-        elif args.iterator == 'thread':
-            train_iterator = chainer.iterators.MultithreadIterator(
-                train_dataset, args.batchsize, n_threads=args.loaderjob)
-            val_iterator = chainer.iterators.MultithreadIterator(
-                val_dataset, args.val_batchsize, n_threads=args.loaderjob,
-                repeat=False)
-        else:
-            train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
-            val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
-                                                            repeat=False, shuffle=False)
+                trainer.extend(extensions.dump_graph('main/loss'))
+                trainer.extend(extensions.LogReport(trigger=log_interval))
+                trainer.extend(extensions.observe_lr(), trigger=log_interval)
+                trainer.extend(extensions.PrintReport([
+                    'epoch', 'iteration', 'main/loss', 'validation/main/loss',
+                    'main/accuracy', 'validation/main/accuracy', 'lr'
+                ]), trigger=log_interval)
+                trainer.extend(extensions.ProgressBar(update_interval=10))
+
+        if args.resume:
+            chainer.serializers.load_npz(args.resume, trainer)
+
+        trainer.run()
+
     else:
         # Inverse worker
-        train_dataset = DummyDataset()
-        val_dataset = DummyDataset()
-        train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
-        val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
-                                                        repeat=False, shuffle=False)
-
-    optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
-    optimizer.setup(model)
-
-    updater = training.StandardUpdater(train_iterator, optimizer,
-                                       device=device)
-    trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
-
-    val_interval = (10, 'iteration') if args.test else (1, 'epoch')
-    log_interval = (10, 'iteration') if args.test else (1, 'epoch')
-
-    if comm.is_grad_worker:
-        # Evaluator
-        evaluator = TestModeEvaluator(val_iterator, model, device=device)
-        evaluator = chainermn.create_multi_node_evaluator(evaluator, comm.gcomm)
-        trainer.extend(evaluator, trigger=val_interval)
-
-        # Some display and output extensions are necessary only for one worker.
-        # (Otherwise, there would just be repeated outputs.)
-        if comm.gcomm.rank == 0:
-            trainer.extend(extensions.dump_graph('main/loss'))
-            trainer.extend(extensions.LogReport(trigger=log_interval))
-            trainer.extend(extensions.observe_lr(), trigger=log_interval)
-            trainer.extend(extensions.PrintReport([
-                'epoch', 'iteration', 'main/loss', 'validation/main/loss',
-                'main/accuracy', 'validation/main/accuracy', 'lr'
-            ]), trigger=log_interval)
-            trainer.extend(extensions.ProgressBar(update_interval=10))
-
-    if args.resume:
-        chainer.serializers.load_npz(args.resume, trainer)
-
-    trainer.run()
+        # ======== Create optimizer ========
+        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
+        optimizer.setup(model)
+        i = 0
+        while True:
+            print('inv!', i, comm.wcomm.rank)
+            optimizer.update()
+            i += 1
+        print('Inverse done')
 
 
 if __name__ == '__main__':
