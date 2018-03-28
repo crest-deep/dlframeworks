@@ -225,24 +225,10 @@ class KFACCommunicator(object):
             invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
-        # We will ignore following four linknames
-        keys_ignore = [
-            '/res2/0/conv4',
-            '/res3/0/conv4',
-            '/res4/0/conv4',
-            '/res5/0/conv4',
-        ]
-
         if not self.is_inv_worker and not self.is_grad_worker:
             return
         print('bcast_inv...', len(invs), self.wcomm.rank)
         for linkname, matrices in sorted(invs.items()):
-            # ================================ NEED TO FIX !!! >>> from here
-            # TODO tyohei
-            if linkname in keys_ignore:
-                invs.pop(linkname)
-                continue
-            # ================================ NEED TO FIX !!! <<< to here
             for i, matrix in enumerate(matrices):
                 matrix_link = DummyLink(matrix)
                 self.gcomm_g.broadcast_data(matrix_link)
@@ -302,14 +288,6 @@ class KFACCommunicator(object):
             cov_emas (dict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of covariance EMAs.
         """
-        # We will ignore following four linknames
-        keys_ignore = [
-            '/res2/0/conv4',
-            '/res3/0/conv4',
-            '/res4/0/conv4',
-            '/res5/0/conv4',
-        ]
-
         is_sender = self.is_cov_worker
         is_reciever = self.is_inv_worker
 
@@ -323,12 +301,6 @@ class KFACCommunicator(object):
         elif is_reciever:
             print('sendrecv_cov_ema', len(cov_emas), self.wcomm.rank)
             for linkname, matrices in sorted(cov_emas.items()):
-                # ================================ NEED TO FIX !!! >>> from here
-                # TODO tyohei
-                if linkname in keys_ignore:
-                    cov_emas.pop(linkname)
-                    continue
-                # ================================ NEED TO FIX !!! <<< to here
                 for i, matrix in enumerate(matrices):
                     data = self.wcomm.recv(self.cov_worker_rank, 0)
                     with cuda.get_device_from_array(matrix) as dev:

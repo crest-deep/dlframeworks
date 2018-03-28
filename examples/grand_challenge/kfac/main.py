@@ -149,7 +149,7 @@ def main():
                                                             repeat=False, shuffle=False)
 
         # ======== Create optimizer ========
-        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
+        optimizer = dlframeworks.chainer.optimizers.KFAC(comm, use_doubly_factored=False)
         optimizer.setup(model)
 
         # ======== Create updater ========
