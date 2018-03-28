@@ -230,8 +230,8 @@ def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
     if param_b is not None:
         U_inv, V_inv, G_inv, Fb_inv = invs
         # Apply inverse of full Fisher block (Fb_inv) to bias
-        grad = param_b.grad
-        kfgrad = Fb_inv.dot(grad).astype(grad.dtype)
+        bgrad = param_b.grad
+        kfgrad = Fb_inv.dot(bgrad).astype(bgrad.dtype)
         param_b.kfgrad = kfgrad
     else:
         U_inv, V_inv, G_inv = invs
@@ -263,6 +263,7 @@ def _kfac_grad_update_doubly_factored(param_W, param_b, invs):
     kfgrad = rmatmul(G_inv, \
                rmatmul(V_inv, \
                  rmatmul(U_inv, grad, 0), 1), 2).astype(grad.dtype)
+
 
     param_W.kfgrad = kfgrad.reshape(param_W.grad.shape)
 
@@ -396,7 +397,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.target.cleargrads()
             else:
                 self.target.zerograds()
-
             loss.backward()
             del loss  # No more backward computation, free memory
 
@@ -428,10 +428,14 @@ class KFAC(chainer.optimizer.GradientMethod):
                         _kfac_grad_update(xp, param_W, param_b, invs)
 
         self.reallocate_cleared_grads()
-        self.call_hooks()
+        self.call_hooks('pre')
+
         self.t += 1
         for param in self.target.params():
             param.update()
+
+        self.reallocate_cleared_grads()
+        self.call_hooks('post')
 
     def get_param(self, path):
         for _name, _param in self.target.namedparams():
