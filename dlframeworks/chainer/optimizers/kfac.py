@@ -420,7 +420,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             n = len(self.rank_dict)
             for i, linkname in enumerate(self.rank_dict.keys()):
                 self.cov_ema_update_core(linkname)
-                print('cov_ema_update_core()...', i+1, '/', n)
             # ======== Communication
             if comm is not None:
                 comm.sendrecv_cov_ema(self.cov_ema_dict)
