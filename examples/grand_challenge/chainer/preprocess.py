@@ -109,6 +109,11 @@ mpirun \\
     --loadtype {loadtype} \\
     --iterator {iterator} \\
     --optimizer {optimizer} \\
+    --lr {lr} \\
+    --momentum {momentum} \\
+    --cov_ema_decay {cov_ema_decay} \\
+    --inv_freq {inv_freq} \\
+    --damping {damping} \\
 """.format(**options)
     if options['initmodel'] is not None:
         shell_script += '    --initmodel {initmodel} \\\n'.format(**options)
