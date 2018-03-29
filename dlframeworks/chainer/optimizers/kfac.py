@@ -1,6 +1,6 @@
 import collections
 import heapq
-
+import time
 import numpy
 
 import chainer
@@ -168,9 +168,9 @@ def _kfac_backward(loss, chain):
         return None
 
     def add_cand(cand):
-       if cand not in seen_set:
-           heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
-           seen_set.add(cand)
+        if cand not in seen_set:
+            heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
+            seen_set.add(cand)
 
     add_cand(loss.creator_node)
 
@@ -336,6 +336,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.inv_alg = inv_alg
 
         self.is_training_done = False
+        self.times = collections.defaultdict(lambda: 0)
 
         # TODO Initialize below with all batch
         self.cov_ema_dict = {}
@@ -478,7 +479,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         return collections.OrderedDict(
             sorted(dictionary.items(), key=lambda x: x[0]))
 
-
     def cov_ema_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
         # ======== Communication
@@ -492,7 +492,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.conv_args_dict = _kfac_backward(loss, self.target)
             del loss
 
-            n = len(self.rank_dict)
             for i, linkname in enumerate(self.rank_dict.keys()):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
@@ -500,7 +499,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 comm.sendrecv_cov_ema(self.cov_ema_dict)
                 self.t_inv += 1
             self.t_cov += 1
-
 
     def cov_ema_update_core(self, linkname):
         comm = self.communicator
@@ -533,7 +531,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             self.cov_ema_dict[linkname] = cov_emas
         else:
             self.cov_ema_dict[linkname] = covs
-
 
     def inv_update(self):
         comm = self.communicator

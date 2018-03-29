@@ -77,7 +77,7 @@ class KFACCommunicator(object):
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
-                 npergroup=1, debug=False, timeout=120):
+                 npergroup=1, debug=False, timeout=90):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -94,10 +94,10 @@ class KFACCommunicator(object):
         if npergroup < 1 or not isinstance(npergroup, int):
             raise ValueError('Number of nodes per group must positive int')
 
-        n_group = wcomm.inter_size // npergroup
-        if n_group == 0:
-            n_group = 1
-        group_lst = np.array_split(np.arange(wcomm.inter_size), n_group)
+        n_groups = wcomm.inter_size // npergroup
+        if n_groups == 0:
+            n_groups = 1
+        group_lst = np.array_split(np.arange(wcomm.inter_size), n_groups)
         is_cov_worker = 0
         is_inv_worker = 0
         is_grad_worker = 0
@@ -243,7 +243,6 @@ class KFACCommunicator(object):
             while t < self.timeout:
                 flag, status = req.test()
                 if not flag:
-                    print('inv sleeping', t, '/', self.timeout)
                     time.sleep(10)
                     t += 10
                 else:
@@ -306,7 +305,6 @@ class KFACCommunicator(object):
             while t < self.timeout:
                 flag, status = req.test()
                 if not flag:
-                    print('cov sleeping', t, '/', self.timeout)
                     time.sleep(10)
                     t += 10
                 else:
@@ -320,7 +318,7 @@ class KFACCommunicator(object):
             # recieve parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = self.wcomm.recv(self.grad_master_rank, 0)
-                with cuda.get_device_from_array(param.data) as dev:
+                with chainer.cuda.get_device_from_array(param.data) as dev:
                     if dev.id < 0:
                         param.data[:] = data
                     else:
@@ -347,7 +345,7 @@ class KFACCommunicator(object):
             for linkname, matrices in sorted(cov_emas.items()):
                 for i, matrix in enumerate(matrices):
                     data = self.wcomm.recv(self.cov_worker_rank, 0)
-                    with cuda.get_device_from_array(matrix) as dev:
+                    with chainer.cuda.get_device_from_array(matrix) as dev:
                         if dev.id < 0:
                             matrix[:] = data
                         else:
