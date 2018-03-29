@@ -81,6 +81,8 @@ mpirun \\
   -np {np} \\
   -output-proctable \\
   -mca pml ob1 \\
+  -mca mpi_warn_on_fork 0 \\
+  -mca orte_base_help_aggregate 0 \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
   python ./main.py \\
