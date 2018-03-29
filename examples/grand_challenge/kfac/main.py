@@ -8,6 +8,7 @@ import chainermn
 import multiprocessing
 import cupy as cp
 import numpy as np
+import sys
 
 import dlframeworks
 
@@ -75,18 +76,24 @@ def main():
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
         args.communicator, debug=True)
-    print(comm.wcomm.rank, comm.wcomm.intra_rank)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
-    chainer.cuda.get_device(device).use()
-
+    chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
-    # Initialize weights -> needed 
+
+    if args.initmodel:
+        print('Load model from', args.initmodel)
+        chainer.serializers.load_npz(args.initmodel, model)
+
+    # Initialize weights
     x = np.zeros((1, 3, model.insize, model.insize), dtype=np.float32)
     t = np.zeros((1,), dtype=np.int32)
     model(x, t)
 
-    model.to_gpu()
-    print('>>>>>>>>', comm.wcomm.rank, comm.wcomm.intra_rank, 'Allocated! <<<<<<<<')
+    try:
+        model.to_gpu()
+    except chainer.cuda.cupy.cuda.runtime.CUDARuntimeError as e:
+        print('Error occured in {}'.format(comm.wcomm.rank), file=sys.stderr)
+        raise e
 
     if comm.wcomm.mpi_comm.rank == 0:
         print('==========================================')
@@ -96,9 +103,13 @@ def main():
         print('Num Minibatch-size: {}'.format(args.batchsize))
         print('Num epoch: {}'.format(args.epoch))
         print('==========================================')
-    if args.initmodel:
-        print('Load model from', args.initmodel)
-        chainer.serializers.load_npz(args.initmodel, model)
+
+    # ======== Create optimizer ========
+    optimizer = dlframeworks.chainer.optimizers.KFAC(
+        comm, use_doubly_factored=False, inv_freq=10, damping=0.035, lr=0.01)
+    # damping ~ 0.035 is good
+    optimizer.setup(model)
+
 
     if comm.is_grad_worker or comm.is_cov_worker:
         if comm.is_grad_worker:
@@ -148,16 +159,20 @@ def main():
             val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
                                                             repeat=False, shuffle=False)
 
-        # ======== Create optimizer ========
-        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
-        optimizer.setup(model)
-
         # ======== Create updater ========
         updater = training.StandardUpdater(train_iterator, optimizer,
                                            device=device)
 
         # ======== Create trainer ========
-        trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
+        if comm.is_cov_worker:
+            def stop_trigger(x):
+                if x.updater.get_optimizer('main').is_training_done:
+                    return True
+                else:
+                    return False
+            trainer = training.Trainer(updater, stop_trigger, args.out)
+        else:
+            trainer = training.Trainer(updater, (args.epoch, 'epoch'), args.out)
 
         # ======== Extend trainer ========
         val_interval = (10, 'iteration') if args.test else (1, 'epoch')
@@ -185,17 +200,15 @@ def main():
             chainer.serializers.load_npz(args.resume, trainer)
 
         trainer.run()
+        print('done', comm.wcomm.rank)
 
     else:
         # Inverse worker
         # ======== Create optimizer ========
-        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
-        optimizer.setup(model)
-        i = 0
         while True:
-            print('inv!', i, comm.wcomm.rank)
-            optimizer.update()
-            i += 1
+            is_training_done = optimizer.update()
+            if is_training_done:
+                break
         print('Inverse done')
 
 

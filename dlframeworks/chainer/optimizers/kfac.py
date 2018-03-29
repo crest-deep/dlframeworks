@@ -1,6 +1,6 @@
 import collections
 import heapq
-
+import time
 import numpy
 
 import chainer
@@ -168,9 +168,9 @@ def _kfac_backward(loss, chain):
         return None
 
     def add_cand(cand):
-       if cand not in seen_set:
-           heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
-           seen_set.add(cand)
+        if cand not in seen_set:
+            heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
+            seen_set.add(cand)
 
     add_cand(loss.creator_node)
 
@@ -335,18 +335,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.conv_args_dict = {}
         self.inv_alg = inv_alg
 
+        self.is_training_done = False
+        self.times = collections.defaultdict(lambda: 0)
+
         # TODO Initialize below with all batch
         self.cov_ema_dict = {}
         self.inv_dict = {}
-
-        self.dictionaries = [
-            self.acts_dict,
-            self.grads_dict,
-            self.rank_dict,
-            self.conv_args_dict,
-            self.cov_ema_dict,
-            self.inv_dict,
-        ]
 
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
@@ -382,9 +376,12 @@ class KFAC(chainer.optimizer.GradientMethod):
             if comm.is_grad_worker:
                 self.grad_update(lossfun, *args, **kwds)
             elif comm.is_cov_worker:
-                self.cov_ema_update(lossfun, *args, **kwds)
+                is_training_done = self.cov_ema_update(lossfun, *args, **kwds)
+                self.is_training_done = is_training_done
             else:
-                self.inv_update()
+                is_training_done = self.inv_update()
+                self.is_training_done = is_training_done
+                return is_training_done
 
     def grad_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
@@ -482,19 +479,19 @@ class KFAC(chainer.optimizer.GradientMethod):
         return collections.OrderedDict(
             sorted(dictionary.items(), key=lambda x: x[0]))
 
-
     def cov_ema_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
-            comm.sendrecv_param(self)
+            is_done = comm.sendrecv_param(self)
+            if is_done:
+                return True
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, \
                 self.conv_args_dict = _kfac_backward(loss, self.target)
             del loss
 
-            n = len(self.rank_dict)
             for i, linkname in enumerate(self.rank_dict.keys()):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
@@ -502,7 +499,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 comm.sendrecv_cov_ema(self.cov_ema_dict)
                 self.t_inv += 1
             self.t_cov += 1
-
 
     def cov_ema_update_core(self, linkname):
         comm = self.communicator
@@ -536,7 +532,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         else:
             self.cov_ema_dict[linkname] = covs
 
-
     def inv_update(self):
         comm = self.communicator
         # ======== Communication
@@ -549,7 +544,9 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.t_inv += 1
         # ======== Communication
         if comm is not None:
-            comm.bcast_inv(self.inv_dict)
+            is_done = comm.bcast_inv(self.inv_dict)
+            if is_done:
+                return True
 
     def inv_update_core(self, linkname, emas):
         xp = cuda.get_array_module(*emas)

@@ -79,6 +79,8 @@ echo ""
 echo "Job started on $(date)"
 echo "................................"
 
+export CUDA_CACHE_DISABLE=1
+
 mpirun \\
   -npernode {npernode} \\
   -np {np} \\
@@ -86,14 +88,13 @@ mpirun \\
   -mca pml ob1 \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
-  -x LD_LIBRARY_PATH \\
   -x CUDA_CACHE_DISABLE \\
   -x CUDA_HOME \\
   -x CUDA_PATH \\
   -x CUDA_TOP \\
   -x NCCL_IB_CUDA_SUPPORT \\
   -x NCCL_IB_SL \\
-  python ./main.py \\
+  python -W ignore ./main.py \\
     {train} \\
     {val} \\
     --train-root {train_root} \\
