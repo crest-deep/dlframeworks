@@ -335,18 +335,11 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.conv_args_dict = {}
         self.inv_alg = inv_alg
 
+        self.is_training_done = False
+
         # TODO Initialize below with all batch
         self.cov_ema_dict = {}
         self.inv_dict = {}
-
-        self.dictionaries = [
-            self.acts_dict,
-            self.grads_dict,
-            self.rank_dict,
-            self.conv_args_dict,
-            self.cov_ema_dict,
-            self.inv_dict,
-        ]
 
     lr = optimizer.HyperparameterProxy('lr')
     momentum = optimizer.HyperparameterProxy('momentum')
@@ -382,9 +375,12 @@ class KFAC(chainer.optimizer.GradientMethod):
             if comm.is_grad_worker:
                 self.grad_update(lossfun, *args, **kwds)
             elif comm.is_cov_worker:
-                self.cov_ema_update(lossfun, *args, **kwds)
+                is_training_done = self.cov_ema_update(lossfun, *args, **kwds)
+                self.is_training_done = is_training_done
             else:
-                self.inv_update()
+                is_training_done = self.inv_update()
+                self.is_training_done = is_training_done
+                return is_training_done
 
     def grad_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
@@ -487,7 +483,9 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
-            comm.sendrecv_param(self)
+            is_done = comm.sendrecv_param(self)
+            if is_done:
+                return True
         if lossfun is not None:
             loss = lossfun(*args, **kwds)
             self.acts_dict, self.grads_dict, self.rank_dict, \
@@ -549,7 +547,9 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.t_inv += 1
         # ======== Communication
         if comm is not None:
-            comm.bcast_inv(self.inv_dict)
+            is_done = comm.bcast_inv(self.inv_dict)
+            if is_done:
+                return True
 
     def inv_update_core(self, linkname, emas):
         xp = cuda.get_array_module(*emas)

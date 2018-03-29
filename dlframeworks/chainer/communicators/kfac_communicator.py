@@ -1,7 +1,7 @@
 import chainer
-from chainer.backends import cuda
 import chainermn
 import numpy as np
+import time
 
 
 def _create_print_mpi(comm):
@@ -73,10 +73,11 @@ class KFACCommunicator(object):
         mpi_comm: MPI4py communicator
         npergroup (int): Number of nodes per group.
         debug (bool): Print debug message or not.
+        timeout (int): Minutes for timeout.
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
-                 npergroup=1, debug=False):
+                 npergroup=1, debug=False, timeout=120):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -165,6 +166,8 @@ class KFACCommunicator(object):
             print_mpi('cov_worker_rank: {}'.format(cov_worker_rank))
 
         super(KFACCommunicator, self).__setattr__(
+            'timeout', timeout)
+        super(KFACCommunicator, self).__setattr__(
             'wcomm', wcomm)
         super(KFACCommunicator, self).__setattr__(
             'ccomm', ccomm)
@@ -225,15 +228,39 @@ class KFACCommunicator(object):
             invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
+        is_sender = self.is_grad_master
+        is_reciever = self.is_inv_worker
+
+        if is_sender:
+            # send heart beat
+            beat = 1
+            self.wcomm.mpi_comm.send(beat, dest=self.inv_worker_rank, tag=12)
+        elif is_reciever:
+            # recieve heart beat
+            req = self.wcomm.mpi_comm.irecv(
+                source=self.grad_master_rank, tag=12)
+            t = 0
+            while t < self.timeout:
+                flag, status = req.test()
+                if not flag:
+                    print('inv sleeping', t, '/', self.timeout)
+                    time.sleep(10)
+                    t += 10
+                else:
+                    break
+            if t >= self.timeout:
+                print('inv canceling')
+                # Nothing came, training is done ... maybe
+                req.Cancel()
+                return True
+
         if not self.is_inv_worker and not self.is_grad_worker:
             return
-        print('bcast_inv...', len(invs), self.wcomm.rank)
         for linkname, matrices in sorted(invs.items()):
             for i, matrix in enumerate(matrices):
                 matrix_link = DummyLink(matrix)
                 self.gcomm_g.broadcast_data(matrix_link)
                 invs[linkname][i] = matrix_link.data
-        print('bcast_inv... done', len(invs), self.wcomm.rank)
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -262,14 +289,35 @@ class KFACCommunicator(object):
         is_reciever = self.is_cov_worker
 
         if is_sender:
-            print('sendrecv_param', self.wcomm.rank)
+            # send heart beat
+            beat = 1
+            self.wcomm.mpi_comm.send(beat, dest=self.cov_worker_rank, tag=11)
+
+            # send parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = param.data
                 data = chainer.cuda.to_cpu(data).astype(np.float32)
                 self.wcomm.send(data, self.cov_worker_rank, 0)
-            print('sendrecv_param done', self.wcomm.rank)
         elif is_reciever:
-            print('sendrecv_param', self.wcomm.rank)
+            # recieve heart beat
+            req = self.wcomm.mpi_comm.irecv(
+                source=self.grad_master_rank, tag=11)
+            t = 0
+            while t < self.timeout:
+                flag, status = req.test()
+                if not flag:
+                    print('cov sleeping', t, '/', self.timeout)
+                    time.sleep(10)
+                    t += 10
+                else:
+                    break
+            if t >= self.timeout:
+                # Nothing came, training is done ... maybe
+                print('cov canceling')
+                req.Cancel()
+                return True
+
+            # recieve parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = self.wcomm.recv(self.grad_master_rank, 0)
                 with cuda.get_device_from_array(param.data) as dev:
@@ -277,7 +325,6 @@ class KFACCommunicator(object):
                         param.data[:] = data
                     else:
                         param.data[:] = chainer.cuda.to_gpu(data)
-            print('sendrecv_param done', self.wcomm.rank)
 
     def sendrecv_cov_ema(self, cov_emas):
         """Send or recieve covariance EMAs
@@ -292,14 +339,11 @@ class KFACCommunicator(object):
         is_reciever = self.is_inv_worker
 
         if is_sender:
-            print('sendrecv_cov_ema', len(cov_emas), self.wcomm.rank)
             for _, matrices in sorted(cov_emas.items()):
                 for matrix in matrices:
                     matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
                     self.wcomm.send(matrix, self.inv_worker_rank, 0)
-            print('sendrecv_cov_ema done', len(cov_emas), self.wcomm.rank)
         elif is_reciever:
-            print('sendrecv_cov_ema', len(cov_emas), self.wcomm.rank)
             for linkname, matrices in sorted(cov_emas.items()):
                 for i, matrix in enumerate(matrices):
                     data = self.wcomm.recv(self.cov_worker_rank, 0)
@@ -308,7 +352,6 @@ class KFACCommunicator(object):
                             matrix[:] = data
                         else:
                             matrix[:] = chainer.cuda.to_gpu(data)
-            print('sendrecv_cov_ema done', len(cov_emas), self.wcomm.rank)
 
 
 def _is_changed(optimizer):

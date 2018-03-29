@@ -1,4 +1,4 @@
-nnodes: 1
+nnodes: 2
 walltime: 00:30:00
 jobname: imagenet
 stdout: "%A.o.log"
@@ -21,7 +21,7 @@ val:        /home/share/ILSVRC2012/labels/val008.txt
 val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
 arch: resnet50
 epoch: 2
-batchsize: 64
+batchsize: 32
 loaderjob: 8
 out: /home/users/Yohei/results/dlframeworks
 resume: null

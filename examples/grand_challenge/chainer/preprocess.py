@@ -30,6 +30,9 @@ def parse_options(options):
 #SBATCH --exclude=kfc039
 #SBATCH -p k80
 #SBATCH -o {result_direcory}/%A.log
+#SBATCH -w kfc[012,041]
+
+export LD_LIBRARY_PATH=/usr/local/cuda-9.1/lib64/stubs:$LD_LIBRARY_PATH
 
 """.format(**options)
     else:
@@ -93,7 +96,7 @@ mpirun \\
   -x CUDA_TOP \\
   -x NCCL_IB_CUDA_SUPPORT \\
   -x NCCL_IB_SL \\
-  python ./main.py \\
+  python -W ignore ./main.py \\
     {train} \\
     {val} \\
     --train-root {train_root} \\
