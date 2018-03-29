@@ -76,6 +76,8 @@ def main():
     parser.add_argument('--cov_ema_decay', type=float, default=0.99)
     parser.add_argument('--inv_freq', type=int, default=20)
     parser.add_argument('--damping', type=float, default=0.001)
+    parser.add_argument('--inv_alg')
+    parser.add_argument('--use_doubly_factored', action='store_true')
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
@@ -111,12 +113,14 @@ def main():
 
     # ======== Create optimizer ========
     optimizer = dlframeworks.chainer.optimizers.KFAC(
-        comm, use_doubly_factored=False,
+        comm,
         lr=args.lr,
         momentum=args.momentum,
         cov_ema_decay=args.cov_ema_decay,
         inv_freq=args.inv_freq,
         damping=args.damping,
+        inv_alg=args.inv_alg,
+        use_doubly_factored=args.use_doubly_factored,
     )
     # damping ~ 0.035 is good
     optimizer.setup(model)
