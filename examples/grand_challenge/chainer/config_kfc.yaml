@@ -18,6 +18,8 @@ momentum: 0.9
 cov_ema_decay: 0.99
 inv_freq: 20
 damping: 0.001
+inv_alg: null
+use_doubly_factored: null
 
 nclasses: 8
 mean: mean.npy
