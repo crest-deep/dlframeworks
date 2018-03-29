@@ -5,10 +5,10 @@ stdout: "%A.o.log"
 stderr: "%A.e.log"
 
 modules:
-  cuda: cuda/9.1
-  nccl: local/nccl/2.1.15
-  cudnn: local/cudnn/7.1
-  mpi: local/openmpi/2.1.3/cuda-9.1
+  cuda: cuda/9.0
+  nccl: local/nccl/2.1.15/cuda-9.0
+  cudnn: local/cudnn/7.1/cuda-9.0
+  mpi: local/openmpi/2.1.3/cuda-9.0
 
 vars: ./modules.sh
 
@@ -20,7 +20,7 @@ train_root: /home/share/ILSVRC2012/ILSVRC2012_img_train
 val:        /home/share/ILSVRC2012/labels/val008.txt
 val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
 arch: resnet50
-epoch: 2
+epoch: 10
 batchsize: 32
 loaderjob: 8
 out: /home/users/Yohei/results/dlframeworks
@@ -31,4 +31,4 @@ test: null
 communicator: hierarchical
 loadtype: development
 iterator: thread
-optimizer: adam
+optimizer: momentum_sgd

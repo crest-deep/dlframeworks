@@ -30,9 +30,6 @@ def parse_options(options):
 #SBATCH --exclude=kfc039
 #SBATCH -p k80
 #SBATCH -o {result_direcory}/%A.log
-#SBATCH -w kfc[012,041]
-
-export LD_LIBRARY_PATH=/usr/local/cuda-9.1/lib64/stubs:$LD_LIBRARY_PATH
 
 """.format(**options)
     else:
@@ -82,13 +79,14 @@ echo ""
 echo "Job started on $(date)"
 echo "................................"
 
+export CUDA_CACHE_DISABLE=1
+
 mpirun \\
   -npernode {npernode} \\
   -np {np} \\
   -output-proctable \\
   -mca pml ob1 \\
   -x PATH \\
-  -x LD_LIBRARY_PATH \\
   -x LD_LIBRARY_PATH \\
   -x CUDA_CACHE_DISABLE \\
   -x CUDA_HOME \\

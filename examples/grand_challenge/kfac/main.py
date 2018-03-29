@@ -76,7 +76,6 @@ def main():
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
         args.communicator, debug=True)
-    print(comm.wcomm.rank, comm.wcomm.intra_rank)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
@@ -96,8 +95,6 @@ def main():
         print('Error occured in {}'.format(comm.wcomm.rank), file=sys.stderr)
         raise e
 
-    print('>>>>>>>>', comm.wcomm.rank, comm.wcomm.intra_rank, 'Allocated! <<<<<<<<')
-
     if comm.wcomm.mpi_comm.rank == 0:
         print('==========================================')
         print('Num process (COMM_WORLD): {}'.format(comm.wcomm.mpi_comm.size))
@@ -106,6 +103,13 @@ def main():
         print('Num Minibatch-size: {}'.format(args.batchsize))
         print('Num epoch: {}'.format(args.epoch))
         print('==========================================')
+
+    # ======== Create optimizer ========
+    optimizer = dlframeworks.chainer.optimizers.KFAC(
+        comm, use_doubly_factored=False, inv_freq=10, damping=0.035, lr=0.01)
+    # damping ~ 0.035 is good
+    optimizer.setup(model)
+
 
     if comm.is_grad_worker or comm.is_cov_worker:
         if comm.is_grad_worker:
@@ -155,10 +159,6 @@ def main():
             val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
                                                             repeat=False, shuffle=False)
 
-        # ======== Create optimizer ========
-        optimizer = dlframeworks.chainer.optimizers.KFAC(comm, use_doubly_factored=False)
-        optimizer.setup(model)
-
         # ======== Create updater ========
         updater = training.StandardUpdater(train_iterator, optimizer,
                                            device=device)
@@ -205,8 +205,6 @@ def main():
     else:
         # Inverse worker
         # ======== Create optimizer ========
-        optimizer = dlframeworks.chainer.optimizers.KFAC(comm)
-        optimizer.setup(model)
         while True:
             is_training_done = optimizer.update()
             if is_training_done:
