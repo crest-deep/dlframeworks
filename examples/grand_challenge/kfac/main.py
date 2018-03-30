@@ -78,6 +78,7 @@ def main():
     parser.add_argument('--damping', type=float, default=0.001)
     parser.add_argument('--inv_alg')
     parser.add_argument('--use_doubly_factored', action='store_true')
+    parser.add_argument('--cov-batchsize', type=int, default=16)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
@@ -130,14 +131,15 @@ def main():
         if comm.is_grad_worker:
             # Gradient worker
             # Load all dataset in memory
-            #dataset_class = dlframeworks.chainer.datasets.CroppingDataset
-            dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
+            dataset_class = dlframeworks.chainer.datasets.CroppingDataset
             sub_comm = comm.gcomm
+            batchsize = args.batchsize
         else:
             # Covariance worker
             # Load dataset in memory when needed
             dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
             sub_comm = comm.ccomm
+            batchsize = args.cov_batchsize
 
         mean = np.load(args.mean)
 
@@ -159,18 +161,18 @@ def main():
         if args.iterator == 'process':
             multiprocessing.set_start_method('forkserver')
             train_iterator = chainer.iterators.MultiprocessIterator(
-                train_dataset, args.batchsize, n_processes=args.loaderjob)
+                train_dataset, batchsize, n_processes=args.loaderjob)
             val_iterator = chainer.iterators.MultiprocessIterator(
                 val_dataset, args.val_batchsize, n_processes=args.loaderjob,
                 repeat=False)
         elif args.iterator == 'thread':
             train_iterator = chainer.iterators.MultithreadIterator(
-                train_dataset, args.batchsize, n_threads=args.loaderjob)
+                train_dataset, batchsize, n_threads=args.loaderjob)
             val_iterator = chainer.iterators.MultithreadIterator(
                 val_dataset, args.val_batchsize, n_threads=args.loaderjob,
                 repeat=False)
         else:
-            train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
+            train_iterator = chainer.iterators.SerialIterator(train_dataset, batchsize)
             val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
                                                             repeat=False, shuffle=False)
 

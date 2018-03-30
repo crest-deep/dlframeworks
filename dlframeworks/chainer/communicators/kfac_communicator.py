@@ -77,7 +77,7 @@ class KFACCommunicator(object):
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
-                 npergroup=1, debug=False, timeout=90):
+                 npergroup=1, debug=False, timeout=400):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -228,6 +228,9 @@ class KFACCommunicator(object):
             invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
+        if not self.is_inv_worker and not self.is_grad_worker:
+            return
+
         is_sender = self.is_grad_master
         is_reciever = self.is_inv_worker
 
@@ -248,18 +251,17 @@ class KFACCommunicator(object):
                 else:
                     break
             if t >= self.timeout:
-                print('inv canceling')
                 # Nothing came, training is done ... maybe
+                print('inv canceling')
                 req.Cancel()
                 return True
 
-        if not self.is_inv_worker and not self.is_grad_worker:
-            return
         for linkname, matrices in sorted(invs.items()):
             for i, matrix in enumerate(matrices):
                 matrix_link = DummyLink(matrix)
+                # Broadcast performs on either GPU or CPU
                 self.gcomm_g.broadcast_data(matrix_link)
-                invs[linkname][i] = matrix_link.data
+                matrix[:] = matrix_link.data
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -273,8 +275,7 @@ class KFACCommunicator(object):
         for i, matrix in enumerate(covs):
             matrix_link = DummyLink(matrix)
             self.ccomm.allreduce_grad(matrix_link)
-            covs[i] = matrix_link.data
-            del matrix_link
+            matrix[:] = matrix_link.data
 
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
