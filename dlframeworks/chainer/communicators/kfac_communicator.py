@@ -1,3 +1,4 @@
+import argparse
 import chainer
 import chainermn
 import numpy as np
@@ -77,7 +78,8 @@ class KFACCommunicator(object):
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
-                 npergroup=1, debug=False, timeout=400):
+                 npergroup=1, debug=False, timeout=90, n_cov_workers=1,
+                 n_inv_workers=1):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -89,81 +91,137 @@ class KFACCommunicator(object):
         wcomm = chainermn.create_communicator(
             communicator_name=communicator_name, mpi_comm=mpi_comm)
 
-        if wcomm.size < 3:
-            raise ValueError('Size of KFACCommunicator must be largaer than 2')
+        if n_cov_workers < 1 or not isinstance(n_cov_workers, int):
+            raise ValueError('Number of cov_worker must be positive int')
+        if n_inv_workers < 1 or not isinstance(n_inv_workers, int):
+            raise ValueError('Number of inv_worker must be positive int')
         if npergroup < 1 or not isinstance(npergroup, int):
             raise ValueError('Number of nodes per group must positive int')
 
         n_groups = wcomm.inter_size // npergroup
         if n_groups == 0:
             n_groups = 1
+
+        if wcomm.size < n_groups * (n_cov_workers + n_inv_workers + 1):
+            raise ValueError('Number of processes is not sufficient')
+
         group_lst = np.array_split(np.arange(wcomm.inter_size), n_groups)
+        is_grad_master = 0
+        is_grad_worker = 0
+        is_cov_master = 0
         is_cov_worker = 0
         is_inv_worker = 0
-        is_grad_worker = 0
-        is_grad_master = 0
+        is_inv_master = 0
+
+        group_inter_size = n_groups  # Number of groups
+        group_inter_rank = 0         # Group ID
+        group_intra_size = 0         # Porcess ID in this group
+        group_intra_rank = 0         # Host ID in this group
+
         for i, group in enumerate(group_lst):
             if wcomm.inter_rank in group:
-                group_id = i
-            if wcomm.inter_rank == group[0]:
-                if wcomm.intra_rank == 0:
-                    # Inverse worker
-                    is_inv_worker = 1
-                elif wcomm.intra_rank == 1:
-                    # Covariance worker
-                    is_cov_worker = 1
-                elif wcomm.intra_rank == 2:
-                    # Gradient master
-                    is_grad_worker = 1
-                    is_grad_master = 1
-                else:
-                    # Gradient worker
-                    is_grad_worker = 1
-        if not (is_inv_worker | is_cov_worker | is_grad_worker):
-            # Gradient worker
-            is_grad_worker = 1
+                group_inter_rank = i
+                group_intra_size = len(group) * wcomm.intra_size
+                j = np.where(group == wcomm.inter_rank)[0][0]
+                k = wcomm.intra_rank
+                group_intra_rank = j * wcomm.intra_size + k
 
-        # Communicator for all covariance workers
-        ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
+        if group_intra_size < (n_cov_workers + n_inv_workers + 1):
+            raise ValueError('Number of processes is not sufficient')
+
+        head = 0
+        if group_intra_rank == head:
+            is_cov_master = 1
+        for i in range(head, n_cov_workers + head):
+            if group_intra_rank == i:
+                is_cov_worker = 1
+            head += 1
+        if group_intra_rank == head:
+            is_inv_master = 1
+        for i in range(head, n_inv_workers + head):
+            if group_intra_rank == i:
+                is_inv_worker = 1
+            head += 1
+        if not (is_cov_worker | is_inv_worker):
+            if group_intra_rank == head:
+                is_grad_master = 1
+            is_grad_worker = 1
 
         # Communicator for all gradient workers
         gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
 
-        # Communicator for inverse worker and gradient master PER group
-        color = (group_id + 1) * (is_inv_worker | is_grad_worker)
-        key = 0 if is_inv_worker else wcomm.rank + 1
+        # Communicator for all covariance workers
+        ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
+
+        # Communicator for all inverse workers in a group
+        color = (group_inter_rank + 1) * is_inv_worker
+        key = 0 if is_inv_master else wcomm.rank + 1
+        icomm_g = wcomm.split(color=color, key=key)
+
+        # Communicator for inverse master and gradient worker PER group
+        color = (group_inter_rank + 1) * (is_grad_worker | is_inv_master)
+        key = 0 if is_inv_master else wcomm.rank + 1
         gcomm_g = wcomm.split(color=color, key=key)
 
-        # Communicator for all gradient workers and covariance workers
-        color = is_cov_worker | is_grad_worker
-        gccomm = wcomm.split(color=color, key=wcomm.rank)
-
-        send_buf = [is_inv_worker, is_cov_worker, is_grad_worker,
-                    is_grad_master, wcomm.rank, wcomm.size, group_id]
+        send_buf = [
+            is_grad_master,
+            is_grad_worker,
+            is_cov_master,
+            is_cov_worker,
+            is_inv_master,
+            is_inv_worker,
+            group_inter_rank,
+            group_intra_rank,
+            group_inter_size,
+            group_intra_size,
+            wcomm.rank,
+        ]
         # ======== COMMUNICATION ========
         # get all flags from all processes
         recv_buf = wcomm.mpi_comm.allgather(send_buf)
+        # ===============================
+
+        grad_worker_ranks = []
+        cov_worker_ranks = []
+        inv_worker_ranks = []
         for flags in recv_buf:
-            if group_id == flags[6]:
-                if flags[0] == 1:
-                    # Rank of inv_worker in wcomm of THIS group
-                    inv_worker_rank = flags[4]
-                elif flags[1] == 1:
-                    # Rank of cov_worker in wcomm of THIS group
-                    cov_worker_rank = flags[4]
+            if group_inter_rank == flags[6]:
+                if flags[1] == 1:
+                    grad_worker_ranks.append(flags[-1])
+                    if flags[0] == 1:
+                        grad_master_rank = flags[-1]
                 elif flags[3] == 1:
-                    # Rank of grad_master in wcomm of THIS group
-                    grad_master_rank = flags[4]
+                    cov_worker_ranks.append(flags[-1])
+                    if flags[2] == 1:
+                        cov_master_rank = flags[-1]
+                elif flags[5] == 1:
+                    inv_worker_ranks.append(flags[-1])
+                    if flags[4] == 1:
+                        inv_master_rank = flags[-1]
 
         if debug:
-            print_mpi('[{}{}{}{}:{}]'.format(
-                is_inv_worker,
-                is_cov_worker,
-                is_grad_worker,
-                is_grad_master,
-                group_id))
-            print_mpi('inv_worker_rank: {}'.format(inv_worker_rank))
-            print_mpi('cov_worker_rank: {}'.format(cov_worker_rank))
+            print_mpi("""---->
+Comm:         {} / {}
+Group inter:  {} / {}
+Group intra:  {} / {}
+Flag:         {}
+Grad master:  {}
+Grad workers: {}
+Cov master:   {}
+Cov workers:  {}
+Inv master:   {}
+Inv workers:  {}
+--------------------------------""".format(
+                wcomm.rank, wcomm.size,
+                group_inter_rank, group_inter_size,
+                group_intra_rank, group_intra_size,
+                [is_grad_master, is_grad_worker, is_cov_worker, is_inv_worker],
+                grad_master_rank,
+                grad_worker_ranks,
+                cov_master_rank,
+                cov_worker_ranks,
+                inv_master_rank,
+                inv_worker_ranks))
 
         super(KFACCommunicator, self).__setattr__(
             'timeout', timeout)
@@ -174,25 +232,31 @@ class KFACCommunicator(object):
         super(KFACCommunicator, self).__setattr__(
             'gcomm', gcomm)
         super(KFACCommunicator, self).__setattr__(
+            'icomm_g', icomm_g)
+        super(KFACCommunicator, self).__setattr__(
             'gcomm_g', gcomm_g)
-        super(KFACCommunicator, self).__setattr__(
-            'gccomm', gccomm)
-        super(KFACCommunicator, self).__setattr__(
-            'is_inv_worker', is_inv_worker)
-        super(KFACCommunicator, self).__setattr__(
-            'is_cov_worker', is_cov_worker)
-        super(KFACCommunicator, self).__setattr__(
-            'is_grad_worker', is_grad_worker)
         super(KFACCommunicator, self).__setattr__(
             'is_grad_master', is_grad_master)
         super(KFACCommunicator, self).__setattr__(
-            'group_id', group_id)
+            'is_grad_worker', is_grad_worker)
         super(KFACCommunicator, self).__setattr__(
-            'inv_worker_rank', inv_worker_rank)
+            'is_cov_worker', is_cov_worker)
         super(KFACCommunicator, self).__setattr__(
-            'cov_worker_rank', cov_worker_rank)
+            'is_inv_worker', is_inv_worker)
+        super(KFACCommunicator, self).__setattr__(
+            'group_inter_size', group_inter_size)
+        super(KFACCommunicator, self).__setattr__(
+            'group_inter_rank', group_inter_rank)
+        super(KFACCommunicator, self).__setattr__(
+            'group_intra_size', group_intra_size)
+        super(KFACCommunicator, self).__setattr__(
+            'group_intra_rank', group_intra_rank)
         super(KFACCommunicator, self).__setattr__(
             'grad_master_rank', grad_master_rank)
+        super(KFACCommunicator, self).__setattr__(
+            'cov_worker_ranks', cov_worker_ranks)
+        super(KFACCommunicator, self).__setattr__(
+            'inv_worker_ranks', inv_worker_ranks)
 
     def __getattr__(self, name):
         return getattr(self.gcomm, name)
@@ -231,31 +295,26 @@ class KFACCommunicator(object):
         if not self.is_inv_worker and not self.is_grad_worker:
             return
 
-        is_sender = self.is_grad_master
-        is_reciever = self.is_inv_worker
+        if self.is_grad_master:
+            _send_heartbeat(self.wcomm.mpi_comm, self.inv_master_rank,
+                            tag=(100 * self.inv_master_rank + 0))
+        elif self.is_inv_master:
+            _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
+                            tag=(100 * self.inv_master_rank + 0))
 
-        if is_sender:
-            # send heart beat
-            beat = 1
-            self.wcomm.mpi_comm.send(beat, dest=self.inv_worker_rank, tag=12)
-        elif is_reciever:
-            # recieve heart beat
-            req = self.wcomm.mpi_comm.irecv(
-                source=self.grad_master_rank, tag=12)
-            t = 0
-            while t < self.timeout:
-                flag, status = req.test()
-                if not flag:
-                    time.sleep(10)
-                    t += 10
-                else:
-                    break
-            if t >= self.timeout:
-                # Nothing came, training is done ... maybe
-                print('inv canceling')
-                req.Cancel()
-                return True
+        # Reduce inverse (Allreduce)
+        # Assume that all inverse worker have memory space with value 0
+        if self.is_inv_worker:
+            for linkname, matrices in sorted(invs.items()):
+                for i, matrix in enumerate(matrices):
+                    matrix_link = DummyLink(matrix)
+                    self.icomm_g.allreduce_grad(matrix_link)
+                    matrix[:] = matrix_link.data
 
+        if not self.is_inv_master and not self.is_grad_worker:
+            return
+
+        # Broadcast inverse
         for linkname, matrices in sorted(invs.items()):
             for i, matrix in enumerate(matrices):
                 matrix_link = DummyLink(matrix)
@@ -289,33 +348,17 @@ class KFACCommunicator(object):
         is_reciever = self.is_cov_worker
 
         if is_sender:
-            # send heart beat
-            beat = 1
-            self.wcomm.mpi_comm.send(beat, dest=self.cov_worker_rank, tag=11)
-
-            # send parameter
-            for name, param in sorted(optimizer.target.namedparams()):
-                data = param.data
-                data = chainer.cuda.to_cpu(data).astype(np.float32)
-                self.wcomm.send(data, self.cov_worker_rank, 0)
+            for cov_worker_rank in self.cov_worker_ranks:
+                _send_heartbeat(self.wcomm.mpi_comm, cov_worker_rank,
+                                tag=(100 * cov_worker_rank + 2))
+                # send parameter
+                for name, param in sorted(optimizer.target.namedparams()):
+                    data = param.data
+                    data = chainer.cuda.to_cpu(data).astype(np.float32)
+                    self.wcomm.send(data, cov_worker_rank, 0)
         elif is_reciever:
-            # recieve heart beat
-            req = self.wcomm.mpi_comm.irecv(
-                source=self.grad_master_rank, tag=11)
-            t = 0
-            while t < self.timeout:
-                flag, status = req.test()
-                if not flag:
-                    time.sleep(10)
-                    t += 10
-                else:
-                    break
-            if t >= self.timeout:
-                # Nothing came, training is done ... maybe
-                print('cov canceling')
-                req.Cancel()
-                return True
-
+            _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
+                            tag=(100 * self.wcomm.rank + 2))
             # recieve parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = self.wcomm.recv(self.grad_master_rank, 0)
@@ -328,24 +371,28 @@ class KFACCommunicator(object):
     def sendrecv_cov_ema(self, cov_emas):
         """Send or recieve covariance EMAs
 
-        Sender is covariance worker and reciever is inverse worker.
+        Covariance workers send cov_emas to inverse workers.
 
         Args:
             cov_emas (dict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of covariance EMAs.
         """
-        is_sender = self.is_cov_worker
-        is_reciever = self.is_inv_worker
+        if not self.is_cov_master and not self.is_inv_worker:
+            return
 
-        if is_sender:
-            for _, matrices in sorted(cov_emas.items()):
-                for matrix in matrices:
-                    matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                    self.wcomm.send(matrix, self.inv_worker_rank, 0)
-        elif is_reciever:
+        # Assuming cov_master has all cov_emas
+        if self.is_cov_master:
+            for inv_worker_rank in self.inv_worker_ranks:
+                for linkname, matrices in sorted(cov_emas.items()):
+                    for matrix in matrices:
+                        matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                        self.wcomm.send(matrix, inv_worker_rank,
+                                        (100 * inv_worker_rank + 3))
+        elif self.is_inv_worker:
             for linkname, matrices in sorted(cov_emas.items()):
-                for i, matrix in enumerate(matrices):
-                    data = self.wcomm.recv(self.cov_worker_rank, 0)
+                for matrix in matrices:
+                    data = self.wcomm.recv(self.cov_master_rank,
+                                           (100 * self.wcomm.rank + 3))
                     with chainer.cuda.get_device_from_array(matrix) as dev:
                         if dev.id < 0:
                             matrix[:] = data
@@ -366,5 +413,36 @@ def _is_changed(optimizer):
     return False
 
 
+def _send_heartbeat(comm, dest, tag):
+    # send heartbeat
+    beat = 1
+    comm.send(beat, dest=dest, tag=tag)
+    return True
+
+
+def _recv_heartbeat(comm, source, tag, timeout):
+    # recieve heartbeat
+    req = comm.irecv(source=source, tag=tag)
+    t = 0
+    while t < timeout:
+        flag, status = req.test()
+        if not flag:
+            time.sleep(10)
+            t += 10
+        else:
+            return True
+    if t >= timeout:
+        # Nothing came, cancel the communication
+        req.Cancel()
+        return False
+    return True
+
+
 if __name__ == '__main__':
-    comm = KFACCommunicator(communicator_name='naive', debug=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--n_cov_workers', type=int, default=1)
+    parser.add_argument('--n_inv_workers', type=int, default=1)
+    args = parser.parse_args()
+    comm = KFACCommunicator(communicator_name='naive', debug=True,
+                            n_cov_workers=args.n_cov_workers,
+                            n_inv_workers=args.n_inv_workers)

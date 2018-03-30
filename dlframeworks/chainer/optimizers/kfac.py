@@ -462,17 +462,17 @@ class KFAC(chainer.optimizer.GradientMethod):
                 if isinstance(link, _linear_link):
                     n_out, n_in = param_W.shape
                     if param_b is not None:
-                        A = xp.empty((n_in + 1, n_in + 1))
+                        A = xp.zeros((n_in + 1, n_in + 1))
                     else:
-                        A = xp.empty((n_in, n_in))
-                    G = xp.empty((n_out, n_out))
+                        A = xp.zeros((n_in, n_in))
+                    G = xp.zeros((n_out, n_out))
                 elif isinstance(link, _convolution_2d_link):
                     c_out, c_in, kh, kw = param_W.shape
                     if param_b is not None:
-                        A = xp.empty((c_in*kh*kw + 1, c_in*kh*kw + 1))
+                        A = xp.zeros((c_in*kh*kw + 1, c_in*kh*kw + 1))
                     else:
-                        A = xp.empty((c_in*kh*kw, c_in*kh*kw))
-                    G = xp.empty((c_out, c_out))
+                        A = xp.zeros((c_in*kh*kw, c_in*kh*kw))
+                    G = xp.zeros((c_out, c_out))
                 else:
                     continue
             dictionary[linkname] = [A, G]
