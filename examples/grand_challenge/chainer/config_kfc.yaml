@@ -1,5 +1,5 @@
 nnodes: 1
-walltime: 00:30:00
+walltime: 24:00:00
 jobname: imagenet
 stdout: "%A.o.log"
 stderr: "%A.e.log"
@@ -12,15 +12,15 @@ modules:
 
 vars: ./modules.sh
 
-nclasses: 8
+nclasses: 1000
 mean: mean.npy
 
-train:      /home/share/ILSVRC2012/labels/train008.txt
+train:      /home/share/ILSVRC2012/labels/train.txt
 train_root: /home/share/ILSVRC2012/ILSVRC2012_img_train
-val:        /home/share/ILSVRC2012/labels/val008.txt
+val:        /home/share/ILSVRC2012/labels/val.txt
 val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
 arch: resnet50
-epoch: 2
+epoch: 100
 batchsize: 64
 loaderjob: 8
 out: /home/users/hiroki11x/out
@@ -31,4 +31,4 @@ test: null
 communicator: hierarchical
 loadtype: development
 iterator: thread
-optimizer: adam
+optimizer: momentum_sgd
