@@ -318,7 +318,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                  inv_freq=_default_hyperparam.inv_freq,
                  inv_alg=None,
                  damping=_default_hyperparam.damping,
-                 use_doubly_factored=True,):
+                 use_doubly_factored=False,):
         super(KFAC, self).__init__()
         self.communicator = communicator
         self.hyperparam.lr = lr
