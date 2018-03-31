@@ -492,7 +492,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.conv_args_dict = _kfac_backward(loss, self.target)
             del loss
 
-            for i, linkname in enumerate(self.rank_dict.keys()):
+            for i, linkname in enumerate(sorted(self.rank_dict.keys())):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
             if comm is not None:
