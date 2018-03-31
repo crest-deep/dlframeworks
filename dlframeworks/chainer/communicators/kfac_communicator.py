@@ -79,7 +79,7 @@ class KFACCommunicator(object):
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
                  npergroup=1, debug=False, timeout=90, n_cov_workers=1,
-                 n_inv_workers=1):
+                 n_inv_workers=1, n_workers=None):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -91,12 +91,15 @@ class KFACCommunicator(object):
         wcomm = chainermn.create_communicator(
             communicator_name=communicator_name, mpi_comm=mpi_comm)
 
-        if n_cov_workers < 1 or not isinstance(n_cov_workers, int):
+        if not isinstance(n_cov_workers, int) or n_cov_workers < 1:
             raise ValueError('Number of cov_worker must be positive int')
-        if n_inv_workers < 1 or not isinstance(n_inv_workers, int):
+        if not isinstance(n_inv_workers, int) or n_inv_workers < 1:
             raise ValueError('Number of inv_worker must be positive int')
-        if npergroup < 1 or not isinstance(npergroup, int):
+        if not isinstance(npergroup, int) or npergroup < 1:
             raise ValueError('Number of nodes per group must positive int')
+        if n_workers is not None:
+            if not isinstance(n_workers, int) or n_workers < 1:
+                raise ValueError('Number of worker must be positive int')
 
         n_groups = wcomm.inter_size // npergroup
         if n_groups == 0:
@@ -106,12 +109,6 @@ class KFACCommunicator(object):
             raise ValueError('Number of processes is not sufficient')
 
         group_lst = np.array_split(np.arange(wcomm.inter_size), n_groups)
-        is_grad_master = 0
-        is_grad_worker = 0
-        is_cov_master = 0
-        is_cov_worker = 0
-        is_inv_worker = 0
-        is_inv_master = 0
 
         group_inter_size = n_groups  # Number of groups
         group_inter_rank = 0         # Group ID
@@ -126,8 +123,19 @@ class KFACCommunicator(object):
                 k = wcomm.intra_rank
                 group_intra_rank = j * wcomm.intra_size + k
 
-        if group_intra_size < (n_cov_workers + n_inv_workers + 1):
-            raise ValueError('Number of processes is not sufficient')
+        if n_workers is not None:
+            if group_intra_size < (n_workers + 1):
+                raise ValueError('Number of processes is not sufficient')
+        else:
+            if group_intra_size < (n_cov_workers + n_inv_workers + 1):
+                raise ValueError('Number of processes is not sufficient')
+
+        is_grad_master = 0
+        is_grad_worker = 0
+        is_cov_master = 0
+        is_cov_worker = 0
+        is_inv_worker = 0
+        is_inv_master = 0
 
         head = 0
         if group_intra_rank == head:
@@ -240,7 +248,11 @@ Inv workers:  {}
         super(KFACCommunicator, self).__setattr__(
             'is_grad_worker', is_grad_worker)
         super(KFACCommunicator, self).__setattr__(
+            'is_cov_master', is_cov_master)
+        super(KFACCommunicator, self).__setattr__(
             'is_cov_worker', is_cov_worker)
+        super(KFACCommunicator, self).__setattr__(
+            'is_inv_master', is_inv_master)
         super(KFACCommunicator, self).__setattr__(
             'is_inv_worker', is_inv_worker)
         super(KFACCommunicator, self).__setattr__(
@@ -254,7 +266,13 @@ Inv workers:  {}
         super(KFACCommunicator, self).__setattr__(
             'grad_master_rank', grad_master_rank)
         super(KFACCommunicator, self).__setattr__(
+            'grad_worker_ranks', grad_worker_ranks)
+        super(KFACCommunicator, self).__setattr__(
+            'cov_master_rank', cov_master_rank)
+        super(KFACCommunicator, self).__setattr__(
             'cov_worker_ranks', cov_worker_ranks)
+        super(KFACCommunicator, self).__setattr__(
+            'inv_master_rank', inv_master_rank)
         super(KFACCommunicator, self).__setattr__(
             'inv_worker_ranks', inv_worker_ranks)
 
@@ -300,7 +318,7 @@ Inv workers:  {}
                             tag=(100 * self.inv_master_rank + 0))
         elif self.is_inv_master:
             _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
-                            tag=(100 * self.inv_master_rank + 0))
+                            (100 * self.inv_master_rank + 0), self.timeout)
 
         # Reduce inverse (Allreduce)
         # Assume that all inverse worker have memory space with value 0
@@ -358,7 +376,7 @@ Inv workers:  {}
                     self.wcomm.send(data, cov_worker_rank, 0)
         elif is_reciever:
             _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
-                            tag=(100 * self.wcomm.rank + 2))
+                            (100 * self.wcomm.rank + 2), self.timeout)
             # recieve parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = self.wcomm.recv(self.grad_master_rank, 0)
