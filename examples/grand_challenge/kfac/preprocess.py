@@ -160,6 +160,11 @@ def main():
     log_dst = options['result_direcory']
     os.makedirs(log_dst, exist_ok=True)
 
+    latest_dst = os.path.join(options['out'], 'latest')
+    if os.path.exists(latest_dst):
+        os.unlink(latest_dst)
+    os.symlink(src_dst, latest_dst)
+
     print(os.path.join(src_dst, args.out))  # Stdout is passed to `submit` script.
 
 

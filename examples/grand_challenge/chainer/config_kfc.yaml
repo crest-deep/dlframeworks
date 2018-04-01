@@ -16,7 +16,7 @@ vars: ./modules.sh
 lr: 0.001
 momentum: 0.9
 cov_ema_decay: 0.99
-inv_freq: 10
+inv_freq: 4
 damping: 0.005
 inv_alg: null
 use_doubly_factored: null
