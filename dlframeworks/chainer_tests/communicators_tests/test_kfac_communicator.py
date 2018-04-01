@@ -107,7 +107,7 @@ class KFACCommunicatorTest(unittest.TestCase):
         roots = collections.defaultdict(lambda: [])
         for name, param in sorted(self.model.namedparams()):
             for i in range(n_invs):
-                shape = (i + 1, i + 1)
+                shape = (i + 1024, i + 1024)
                 if self.comm.is_grad_worker:
                     array = cp.zeros(shape, dtype=cp.float32)
                 else:

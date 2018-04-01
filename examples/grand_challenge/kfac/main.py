@@ -83,7 +83,7 @@ def main():
     args = parser.parse_args()
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
-        args.communicator, debug=True)
+        args.communicator, debug=True, timeout=300, check_value=True)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
@@ -183,7 +183,7 @@ def main():
         # ======== Create trainer ========
         if comm.is_cov_worker:
             def stop_trigger(x):
-                if x.updater.get_optimizer('main').is_training_done:
+                if x.updater.get_optimizer('main').is_done:
                     return True
                 else:
                     return False
@@ -223,8 +223,8 @@ def main():
         # Inverse worker
         # ======== Create optimizer ========
         while True:
-            is_training_done = optimizer.update()
-            if is_training_done:
+            optimizer.update()
+            if optimizer.is_done:
                 break
         print('Inverse done')
 

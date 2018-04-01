@@ -13,11 +13,16 @@ def _create_print_mpi(comm):
     digits = len(str(size - 1))
     prefix = '[{{:0{}}}/{}:{}] '.format(digits, size, host).format(rank)
 
-    def print_mpi(obj):
+    def print_mpi(*args, root=None, **kwargs):
         for i in range(size):
             if i == rank:
-                print(prefix, end='')
-                print(obj)
+                if root is not None:
+                    if i == root:
+                        print(prefix, end='')
+                        print(*args, **kwargs)
+                else:
+                    print(prefix, end='')
+                    print(*args, **kwargs)
             comm.Barrier()
     return print_mpi
 
@@ -74,12 +79,17 @@ class KFACCommunicator(object):
         mpi_comm: MPI4py communicator
         npergroup (int): Number of nodes per group.
         debug (bool): Print debug message or not.
-        timeout (int): Minutes for timeout.
+        timeout (int): Seconds for timeout.
+        join_cov (bool): Join covariance worker and inverse worker
+        use_cupy (bool): Use ChainerMN's CuPy direct communication
+        check_value (bool): Check the communicated values are correct every
+            communication.
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
                  npergroup=1, debug=False, timeout=90, n_cov_workers=1,
-                 n_inv_workers=1, join_cov=False):
+                 n_inv_workers=1, join_cov=False, use_cupy=False,
+                 check_value=False):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -244,6 +254,10 @@ Inv workers:  {}
         super(KFACCommunicator, self).__setattr__(
             'join_cov', join_cov)
         super(KFACCommunicator, self).__setattr__(
+            'use_cupy', use_cupy)
+        super(KFACCommunicator, self).__setattr__(
+            'check_value', check_value)
+        super(KFACCommunicator, self).__setattr__(
             'wcomm', wcomm)
         super(KFACCommunicator, self).__setattr__(
             'ccomm', ccomm)
@@ -327,17 +341,26 @@ Inv workers:  {}
             _send_heartbeat(self.wcomm.mpi_comm, self.inv_master_rank,
                             tag=(100 * self.inv_master_rank + 0))
         elif self.is_inv_master:
-            _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
-                            (100 * self.inv_master_rank + 0), self.timeout)
+            is_done = _recv_heartbeat(
+                self.wcomm.mpi_comm, self.grad_master_rank,
+                (100 * self.inv_master_rank + 0), self.timeout)
+            if is_done:
+                return True
 
         # Reduce inverse (Allreduce)
         # Assume that all inverse worker have memory space with value 0
         if self.is_inv_worker:
             for linkname, matrices in sorted(invs.items()):
                 for i, matrix in enumerate(matrices):
+                    if self.check_value:
+                        x = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                        x = self.icomm_g.mpi_comm.reduce(x)
                     matrix_link = DummyLink(matrix)
                     self.icomm_g.allreduce_grad(matrix_link)
                     matrix[:] = matrix_link.data * self.icomm_g.size
+                    if self.check_value:
+                        y = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                        np.testing.assert_array_almost_equal(x, y)
 
         if not self.is_inv_master and not self.is_grad_worker:
             return
@@ -345,10 +368,16 @@ Inv workers:  {}
         # Broadcast inverse
         for linkname, matrices in sorted(invs.items()):
             for i, matrix in enumerate(matrices):
+                if self.check_value:
+                    x = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                    x = self.gcomm_g.mpi_comm.bcast(x)
                 matrix_link = DummyLink(matrix)
                 # Broadcast performs on either GPU or CPU
                 self.gcomm_g.broadcast_data(matrix_link)
                 matrix[:] = matrix_link.data
+                if self.check_value:
+                    y = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                    np.testing.assert_array_almost_equal(x, y)
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -362,7 +391,7 @@ Inv workers:  {}
         for i, matrix in enumerate(covs):
             matrix_link = DummyLink(matrix)
             self.ccomm.allreduce_grad(matrix_link)
-            matrix[:] = matrix_link.data
+            matrix[:] = matrix_link.data * len(self.cov_worker_ranks)
 
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
@@ -385,8 +414,12 @@ Inv workers:  {}
                     data = chainer.cuda.to_cpu(data).astype(np.float32)
                     self.wcomm.send(data, cov_worker_rank, 0)
         elif is_reciever:
-            _recv_heartbeat(self.wcomm.mpi_comm, self.grad_master_rank,
-                            (100 * self.wcomm.rank + 2), self.timeout)
+            is_done = _recv_heartbeat(
+                self.wcomm.mpi_comm, self.grad_master_rank,
+                (100 * self.wcomm.rank + 2), self.timeout)
+            if is_done:
+                return True
+
             # recieve parameter
             for name, param in sorted(optimizer.target.namedparams()):
                 data = self.wcomm.recv(self.grad_master_rank, 0)
@@ -460,12 +493,12 @@ def _recv_heartbeat(comm, source, tag, timeout):
             time.sleep(10)
             t += 10
         else:
-            return True
+            return False
     if t >= timeout:
         # Nothing came, cancel the communication
         req.Cancel()
-        return False
-    return True
+        return True
+    return False
 
 
 if __name__ == '__main__':
