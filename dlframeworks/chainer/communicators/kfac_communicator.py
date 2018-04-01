@@ -79,7 +79,7 @@ class KFACCommunicator(object):
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
                  npergroup=1, debug=False, timeout=90, n_cov_workers=1,
-                 n_inv_workers=1, n_workers=None):
+                 n_inv_workers=1, join_cov=False):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -97,9 +97,6 @@ class KFACCommunicator(object):
             raise ValueError('Number of inv_worker must be positive int')
         if not isinstance(npergroup, int) or npergroup < 1:
             raise ValueError('Number of nodes per group must positive int')
-        if n_workers is not None:
-            if not isinstance(n_workers, int) or n_workers < 1:
-                raise ValueError('Number of worker must be positive int')
 
         n_groups = wcomm.inter_size // npergroup
         if n_groups == 0:
@@ -112,8 +109,8 @@ class KFACCommunicator(object):
 
         group_inter_size = n_groups  # Number of groups
         group_inter_rank = 0         # Group ID
-        group_intra_size = 0         # Porcess ID in this group
-        group_intra_rank = 0         # Host ID in this group
+        group_intra_size = 0         # Number of processes in this group
+        group_intra_rank = 0         # Process ID in this group
 
         for i, group in enumerate(group_lst):
             if wcomm.inter_rank in group:
@@ -123,12 +120,10 @@ class KFACCommunicator(object):
                 k = wcomm.intra_rank
                 group_intra_rank = j * wcomm.intra_size + k
 
-        if n_workers is not None:
-            if group_intra_size < (n_workers + 1):
-                raise ValueError('Number of processes is not sufficient')
-        else:
-            if group_intra_size < (n_cov_workers + n_inv_workers + 1):
-                raise ValueError('Number of processes is not sufficient')
+        max_workers = n_cov_workers + 1 if join_cov else \
+            n_cov_workers + n_inv_workers + 1
+        if group_intra_size < max_workers:
+            raise ValueError('Number of processes is not sufficient')
 
         is_grad_master = 0
         is_grad_worker = 0
@@ -155,6 +150,17 @@ class KFACCommunicator(object):
                 is_grad_master = 1
             is_grad_worker = 1
 
+        if join_cov:
+            if is_cov_worker:
+                is_inv_worker = 1
+                if is_cov_master:
+                    is_inv_master = 1
+            elif is_inv_worker:
+                is_inv_worker = 0
+                is_grad_worker = 1
+                if is_inv_master:
+                    is_inv_master = 0
+
         # Communicator for all gradient workers
         gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
 
@@ -166,7 +172,7 @@ class KFACCommunicator(object):
         key = 0 if is_inv_master else wcomm.rank + 1
         icomm_g = wcomm.split(color=color, key=key)
 
-        # Communicator for inverse master and gradient worker PER group
+        # Communicator for inverse master and all gradient workers in a group
         color = (group_inter_rank + 1) * (is_grad_worker | is_inv_master)
         key = 0 if is_inv_master else wcomm.rank + 1
         gcomm_g = wcomm.split(color=color, key=key)
@@ -198,11 +204,11 @@ class KFACCommunicator(object):
                     grad_worker_ranks.append(flags[-1])
                     if flags[0] == 1:
                         grad_master_rank = flags[-1]
-                elif flags[3] == 1:
+                if flags[3] == 1:
                     cov_worker_ranks.append(flags[-1])
                     if flags[2] == 1:
                         cov_master_rank = flags[-1]
-                elif flags[5] == 1:
+                if flags[5] == 1:
                     inv_worker_ranks.append(flags[-1])
                     if flags[4] == 1:
                         inv_master_rank = flags[-1]
@@ -223,7 +229,9 @@ Inv workers:  {}
                 wcomm.rank, wcomm.size,
                 group_inter_rank, group_inter_size,
                 group_intra_rank, group_intra_size,
-                [is_grad_master, is_grad_worker, is_cov_worker, is_inv_worker],
+                [is_grad_master, is_grad_worker,
+                 is_cov_master, is_cov_worker,
+                 is_inv_master, is_inv_worker],
                 grad_master_rank,
                 grad_worker_ranks,
                 cov_master_rank,
@@ -233,6 +241,8 @@ Inv workers:  {}
 
         super(KFACCommunicator, self).__setattr__(
             'timeout', timeout)
+        super(KFACCommunicator, self).__setattr__(
+            'join_cov', join_cov)
         super(KFACCommunicator, self).__setattr__(
             'wcomm', wcomm)
         super(KFACCommunicator, self).__setattr__(
@@ -304,13 +314,13 @@ Inv workers:  {}
     def bcast_inv(self, invs):
         """Broadcast inverse matrices
 
-        Inverse worker sends A^-1 and G^-1 to all gradient workers.
+        Inverse master sends A^-1 and G^-1 to all gradient workers.
 
         Args:
             invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
-        if not self.is_inv_worker and not self.is_grad_worker:
+        if not self.is_grad_worker and not self.is_inv_worker: 
             return
 
         if self.is_grad_master:
@@ -327,7 +337,7 @@ Inv workers:  {}
                 for i, matrix in enumerate(matrices):
                     matrix_link = DummyLink(matrix)
                     self.icomm_g.allreduce_grad(matrix_link)
-                    matrix[:] = matrix_link.data
+                    matrix[:] = matrix_link.data * self.icomm_g.size
 
         if not self.is_inv_master and not self.is_grad_worker:
             return
@@ -397,6 +407,8 @@ Inv workers:  {}
         """
         if not self.is_cov_master and not self.is_inv_worker:
             return
+        if self.join_cov:
+            return
 
         # Assuming cov_master has all cov_emas
         if self.is_cov_master:
@@ -460,7 +472,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_cov_workers', type=int, default=1)
     parser.add_argument('--n_inv_workers', type=int, default=1)
+    parser.add_argument('--join-cov', action='store_true', default=False)
     args = parser.parse_args()
     comm = KFACCommunicator(communicator_name='naive', debug=True,
                             n_cov_workers=args.n_cov_workers,
-                            n_inv_workers=args.n_inv_workers)
+                            n_inv_workers=args.n_inv_workers,
+                            join_cov=args.join_cov)
