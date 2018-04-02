@@ -19,13 +19,10 @@ import models_v2.nin as nin
 import models_v2.resnet50 as resnet50
 
 
-def observe_hyperparam(name, trigger):
-    """
-    >>> trainer.extend(observe_hyperparam('alpha', (1, 'epoch')))
-    """
+def observe_hyperparam(name):
     def observer(trainer):
-        return trainer.updater.get_optimizer('main').__dict__[name]
-    return extensions.observe_value(name, observer, trigger=trigger)
+        return getattr(trainer.updater.get_optimizer('main'), name)
+    return extensions.observe_value(name, observer)
 
 
 # chainermn.create_multi_node_evaluator can be also used with user customized
@@ -79,12 +76,16 @@ def main():
     parser.add_argument('--inv_alg')
     parser.add_argument('--use_doubly_factored', action='store_true')
     parser.add_argument('--cov-batchsize', type=int, default=16)
+    parser.add_argument('--n-cov-workers', type=int, default=1)
+    parser.add_argument('--n-inv-workers', type=int, default=1)
+    parser.add_argument('--join-cov', action='store_true')
+    parser.add_argument('--npergroup', type=int, default=1)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
-        args.communicator, debug=True, timeout=300, check_value=True,
-        use_cupy=True, join_cov=True)
+        args.communicator, npergroup=args.npergroup, debug=True, timeout=300,
+        join_cov=args.join_cov, n_cov_workers=args.n_cov_workers)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
@@ -208,6 +209,8 @@ def main():
                 trainer.extend(extensions.dump_graph('main/loss'))
                 trainer.extend(extensions.LogReport(trigger=log_interval))
                 trainer.extend(extensions.observe_lr(), trigger=log_interval)
+                trainer.extend(observe_hyperparam('damping'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('inv_freq'), trigger=log_interval)
                 trainer.extend(extensions.PrintReport([
                     'epoch', 'iteration', 'main/loss', 'validation/main/loss',
                     'main/accuracy', 'validation/main/accuracy', 'lr'

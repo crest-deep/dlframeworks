@@ -14,6 +14,8 @@ class CPUCommunicatorCore(object):
             for matrix in matrices:
                 x = chainer.cuda.to_cpu(matrix).astype(np.float32)
                 x = comm.mpi_comm.reduce(x)
+                if x is None:  # I'm not the master
+                    continue
                 with chainer.cuda.get_device_from_array(matrix) as dev:
                     if dev.id < 0:
                         matrix[:] = x

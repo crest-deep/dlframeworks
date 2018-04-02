@@ -491,13 +491,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.conv_args_dict = _kfac_backward(loss, self.target)
             del loss
 
-            #if comm is not None:
-            #    index = comm.cov_worker_ranks.index(comm.wcomm.rank)
-            #    keys = np.array(sorted(list(self.rank_dict.keys())))
-            #    keys = np.array_split(keys)
-            #    my_keys = list(keys[index])
-            #    self.rank_dict = {k: my_keys[k] for k in my_keys}
-
             for i, linkname in enumerate(self.rank_dict.keys()):
                 self.cov_ema_update_core(linkname)
             # ======== Communication
@@ -545,8 +538,23 @@ class KFAC(chainer.optimizer.GradientMethod):
             if self.t_inv == 0 and not comm.is_cov_worker:
                 self.cov_ema_dict = self.allocate_matrices()
             comm.sendrecv_cov_ema(self.cov_ema_dict)
-        for linkname, emas in self.cov_ema_dict.items():
+
+        if comm is not None and len(comm.inv_worker_ranks) > 1:
+            index = comm.inv_worker_ranks.index(comm.wcomm.rank)
+            keys = numpy.array(sorted(list(self.cov_ema_dict.keys())))
+            keys = numpy.array_split(keys, len(comm.inv_worker_ranks))
+            my_keys = list(keys[index])
+            self.inv_dict = self.allocate_matrices()
+        else:
+            my_keys = list(self.cov_ema_dict.keys())
+
+        for key in my_keys:
+            linkname = key
+            emas = self.cov_ema_dict[key]
             self.inv_update_core(linkname, emas)
+
+        #for linkname, emas in self.cov_ema_dict.items():
+        #    self.inv_update_core(linkname, emas)
         self.t_inv += 1
         # ======== Communication
         if comm is not None:

@@ -115,7 +115,12 @@ mpirun \\
     --damping {damping} \\
     --inv_alg {inv_alg} \\
     --cov-batchsize {cov_batchsize} \\
+    --n-cov-workers {n_cov_workers} \\
+    --n-inv-workers {n_inv_workers} \\
+    --npergroup {npergroup} \\
 """.format(**options)
+    if options['join_cov'] is not None:
+        shell_script += '    --join-cov \\\n'.format(**options)
     if options['use_doubly_factored'] is not None:
         shell_script += '    --use_doubly_factored \\\n'.format(**options)
     if options['initmodel'] is not None:

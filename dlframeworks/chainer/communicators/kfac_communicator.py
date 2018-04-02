@@ -44,15 +44,12 @@ class KFACCommunicator(object):
         debug (bool): Print debug message or not.
         timeout (int): Seconds for timeout.
         join_cov (bool): Join covariance worker and inverse worker
-        use_cupy (bool): Use ChainerMN's CuPy direct communication
-        check_value (bool): Check the communicated values every after
             communication, this will take much more time for communication.
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
                  npergroup=1, debug=False, timeout=90, n_cov_workers=1,
-                 n_inv_workers=1, join_cov=False, use_cupy=False,
-                 check_value=False):
+                 n_inv_workers=1, join_cov=False, comm_core_type='GPU'):
         if mpi_comm is None:
             import mpi4py.MPI
             mpi_comm = mpi4py.MPI.COMM_WORLD
@@ -192,6 +189,11 @@ class KFACCommunicator(object):
                     if flags[4] == 1:
                         inv_master_rank = flags[-1]
 
+        if comm_core_type == 'GPU' or comm_core_type == 'gpu':
+            comm_core = kfac_communicator_core.GPUCommunicatorCore(self)
+        else:
+            comm_core = kfac_communicator_core.CPUCommunicatorCore(self)
+
         if debug:
             print_mpi("""---->
 Comm:         {} / {}
@@ -220,8 +222,6 @@ Inv workers:  {}
 
         self.timeout = timeout
         self.join_cov = join_cov
-        self.use_cupy = use_cupy
-        self.check_value = check_value
 
         self.wcomm = wcomm
         self.ccomm = ccomm
@@ -229,7 +229,7 @@ Inv workers:  {}
         self.ccomm_g = ccomm_g
         self.icomm_g = icomm_g
         self.gcomm_g = gcomm_g
-        self.comm_core = kfac_communicator_core.CPUCommunicatorCore(self)
+        self.comm_core = comm_core
 
         self.is_grad_master = is_grad_master
         self.is_grad_worker = is_grad_worker
@@ -293,12 +293,16 @@ Inv workers:  {}
                 return True
 
         if self.is_inv_worker:
+            print('reduce_inv...', self.wcomm.rank)
             self.comm_core.reduce_inv(invs)
+            print('reduce_inv done', self.wcomm.rank)
 
         if not self.is_inv_master and not self.is_grad_worker:
             return
 
+        print('bcast_inv...', self.wcomm.rank)
         self.comm_core.bcast_inv(invs)
+        print('bcast_inv done', self.wcomm.rank)
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -334,7 +338,9 @@ Inv workers:  {}
             if is_done:
                 return True
 
+        print('bcast_param...', self.wcomm.rank)
         self.comm_core.bcast_param(optimizer.target)
+        print('bcast_param done', self.wcomm.rank)
 
     def sendrecv_cov_ema(self, cov_emas):
         """Send or recieve covariance EMAs
@@ -355,13 +361,17 @@ Inv workers:  {}
             for inv_worker_rank in self.inv_worker_ranks:
                 for linkname, matrices in sorted(cov_emas.items()):
                     for matrix in matrices:
+                        print('_send...', self.wcomm.rank)
                         _send(self.wcomm, matrix, self.inv_worker_rank,
                               100 * inv_worker_rank + 4)
+                        print('_send done', self.wcomm.rank)
         elif self.is_inv_worker:
             for linkname, matrices in sorted(cov_emas.items()):
                 for matrix in matrices:
+                    print('_recv...', self.wcomm.rank)
                     _recv(self.wcomm, matrix, self.cov_worker_rank,
                           100 * self.wcomm.rank + 4)
+                    print('_recv done', self.wcomm.rank)
 
 
 def _is_changed(optimizer):
