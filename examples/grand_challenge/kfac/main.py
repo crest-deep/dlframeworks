@@ -83,7 +83,8 @@ def main():
     args = parser.parse_args()
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
-        args.communicator, debug=True, timeout=300, check_value=True)
+        args.communicator, debug=True, timeout=300, check_value=True,
+        use_cupy=True, join_cov=True)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
@@ -131,7 +132,7 @@ def main():
         if comm.is_grad_worker:
             # Gradient worker
             # Load all dataset in memory
-            dataset_class = dlframeworks.chainer.datasets.CroppingDataset
+            dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
             sub_comm = comm.gcomm
             batchsize = args.batchsize
         else:

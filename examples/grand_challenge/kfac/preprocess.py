@@ -85,7 +85,6 @@ mpirun \\
   -npernode {npernode} \\
   -np {np} \\
   -output-proctable \\
-  -mca pml ob1 \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
   -x CUDA_CACHE_DISABLE \\

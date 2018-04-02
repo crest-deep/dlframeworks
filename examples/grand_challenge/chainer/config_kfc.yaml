@@ -1,5 +1,5 @@
-nnodes: 2
-walltime: 00:30:00
+nnodes: 1
+walltime: 05:30:00
 jobname: imagenet
 stdout: "%A.o.log"
 stderr: "%A.e.log"
@@ -38,7 +38,7 @@ resume: null
 initmodel: null
 test: null
 
-communicator: hierarchical
+communicator: pure_nccl
 loadtype: development
 iterator: thread
 optimizer: momentum_sgd

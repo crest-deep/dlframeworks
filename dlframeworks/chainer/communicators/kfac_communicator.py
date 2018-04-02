@@ -43,6 +43,31 @@ class DummyLink(object):
         return self._params['/'].data
 
 
+class DummyChain(object):
+    """A dummy chain that overrides `namedparams` method"""
+
+    def __init__(self, data):
+        self._params = {}
+        self._pack(data)
+
+    def namedparams(self):
+        for name, param in self._params.items():
+            yield name, param
+
+    def unpack(self, data):
+        self._pack(data, unpack=True)
+
+    def _pack(self, data, unpack=False):
+        for linkname, matrices in sorted(data.items()):
+            digits = len(str(len(matrices) - 1))
+            for i, matrix in enumerate(matrices):
+                key = linkname + '/{{:0{}}}'.format(digits).format(i)
+                if unpack:
+                    matrix[:] = self._params[key].data
+                else:
+                    self._params[key] = DummyParameter(matrix)
+
+
 class DummyParameter(object):
     """A dummy link that overrides `grad` method"""
 
@@ -82,8 +107,8 @@ class KFACCommunicator(object):
         timeout (int): Seconds for timeout.
         join_cov (bool): Join covariance worker and inverse worker
         use_cupy (bool): Use ChainerMN's CuPy direct communication
-        check_value (bool): Check the communicated values are correct every
-            communication.
+        check_value (bool): Check the communicated values every after
+            communication, this will take much more time for communication.
     """
 
     def __init__(self, communicator_name='hierarchical', mpi_comm=None,
@@ -177,6 +202,12 @@ class KFACCommunicator(object):
         # Communicator for all covariance workers
         ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
 
+        # Communicator for all covariance workers and gradient master in a
+        # group
+        color = (group_inter_rank + 1) * (is_grad_master | is_cov_worker)
+        key = 0 if is_grad_master else wcomm.rank + 1
+        ccomm_g = wcomm.split(color=color, key=key)
+
         # Communicator for all inverse workers in a group
         color = (group_inter_rank + 1) * is_inv_worker
         key = 0 if is_inv_master else wcomm.rank + 1
@@ -249,62 +280,46 @@ Inv workers:  {}
                 inv_master_rank,
                 inv_worker_ranks))
 
-        super(KFACCommunicator, self).__setattr__(
-            'timeout', timeout)
-        super(KFACCommunicator, self).__setattr__(
-            'join_cov', join_cov)
-        super(KFACCommunicator, self).__setattr__(
-            'use_cupy', use_cupy)
-        super(KFACCommunicator, self).__setattr__(
-            'check_value', check_value)
-        super(KFACCommunicator, self).__setattr__(
-            'wcomm', wcomm)
-        super(KFACCommunicator, self).__setattr__(
-            'ccomm', ccomm)
-        super(KFACCommunicator, self).__setattr__(
-            'gcomm', gcomm)
-        super(KFACCommunicator, self).__setattr__(
-            'icomm_g', icomm_g)
-        super(KFACCommunicator, self).__setattr__(
-            'gcomm_g', gcomm_g)
-        super(KFACCommunicator, self).__setattr__(
-            'is_grad_master', is_grad_master)
-        super(KFACCommunicator, self).__setattr__(
-            'is_grad_worker', is_grad_worker)
-        super(KFACCommunicator, self).__setattr__(
-            'is_cov_master', is_cov_master)
-        super(KFACCommunicator, self).__setattr__(
-            'is_cov_worker', is_cov_worker)
-        super(KFACCommunicator, self).__setattr__(
-            'is_inv_master', is_inv_master)
-        super(KFACCommunicator, self).__setattr__(
-            'is_inv_worker', is_inv_worker)
-        super(KFACCommunicator, self).__setattr__(
-            'group_inter_size', group_inter_size)
-        super(KFACCommunicator, self).__setattr__(
-            'group_inter_rank', group_inter_rank)
-        super(KFACCommunicator, self).__setattr__(
-            'group_intra_size', group_intra_size)
-        super(KFACCommunicator, self).__setattr__(
-            'group_intra_rank', group_intra_rank)
-        super(KFACCommunicator, self).__setattr__(
-            'grad_master_rank', grad_master_rank)
-        super(KFACCommunicator, self).__setattr__(
-            'grad_worker_ranks', grad_worker_ranks)
-        super(KFACCommunicator, self).__setattr__(
-            'cov_master_rank', cov_master_rank)
-        super(KFACCommunicator, self).__setattr__(
-            'cov_worker_ranks', cov_worker_ranks)
-        super(KFACCommunicator, self).__setattr__(
-            'inv_master_rank', inv_master_rank)
-        super(KFACCommunicator, self).__setattr__(
-            'inv_worker_ranks', inv_worker_ranks)
+        self.timeout = timeout
+        self.join_cov = join_cov
+        self.use_cupy = use_cupy
+        self.check_value = check_value
 
-    def __getattr__(self, name):
-        return getattr(self.gcomm, name)
+        self.wcomm = wcomm
+        self.ccomm = ccomm
+        self.gcomm = gcomm
+        self.ccomm_g = ccomm_g
+        self.icomm_g = icomm_g
+        self.gcomm_g = gcomm_g
 
-    def __setattr__(self, name, value):
-        setattr(self.gcomm, name, value)
+        self.is_grad_master = is_grad_master
+        self.is_grad_worker = is_grad_worker
+        self.is_cov_master = is_cov_master
+        self.is_cov_worker = is_cov_worker
+        self.is_inv_master = is_inv_master
+        self.is_inv_worker = is_inv_worker
+
+        self.group_inter_size = group_inter_size
+        self.group_inter_rank = group_inter_rank
+        self.group_intra_size = group_intra_size
+        self.group_intra_rank = group_intra_rank
+
+        self.grad_master_rank = grad_master_rank
+        self.grad_worker_ranks = grad_worker_ranks
+        self.cov_master_rank = cov_master_rank
+        self.cov_worker_ranks = cov_worker_ranks
+        self.inv_master_rank = inv_master_rank
+        self.inv_worker_ranks = inv_worker_ranks
+
+        # _memory_utility module imports mpi4py.MPI inside, to avoid process
+        # fork, we will import this module here
+        from chainermn.communicators import _memory_utility
+        self.gpu_buffer_cov_a = _memory_utility.DeviceMemory()
+        self.gpu_buffer_cov_b = _memory_utility.DeviceMemory()
+        self.gpu_buffer_inv_a = _memory_utility.DeviceMemory()
+        self.gpu_buffer_inv_b = _memory_utility.DeviceMemory()
+        self.gpu_buffer_inv_c = _memory_utility.DeviceMemory()
+        self.gpu_buffer_param = _memory_utility.DeviceMemory()
 
     def allreduce_grad(self, optimizer):
         """Allreduce gradients calculated by backprop
@@ -334,9 +349,10 @@ Inv workers:  {}
             invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
-        if not self.is_grad_worker and not self.is_inv_worker: 
+        if not self.is_grad_worker and not self.is_inv_worker:
             return
 
+        # Send and recieve heart beat
         if self.is_grad_master:
             _send_heartbeat(self.wcomm.mpi_comm, self.inv_master_rank,
                             tag=(100 * self.inv_master_rank + 0))
@@ -348,36 +364,59 @@ Inv workers:  {}
                 return True
 
         # Reduce inverse (Allreduce)
-        # Assume that all inverse worker have memory space with value 0
+        # Assume that all inverse worker have memory space
         if self.is_inv_worker:
-            for linkname, matrices in sorted(invs.items()):
-                for i, matrix in enumerate(matrices):
-                    if self.check_value:
-                        x = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                        x = self.icomm_g.mpi_comm.reduce(x)
-                    matrix_link = DummyLink(matrix)
-                    self.icomm_g.allreduce_grad(matrix_link)
-                    matrix[:] = matrix_link.data * self.icomm_g.size
-                    if self.check_value:
-                        y = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                        np.testing.assert_array_almost_equal(x, y)
+            if self.check_value:
+                _xs = {}
+                for linkname, matrices in sorted(invs.items()):
+                    _xs[linkname] = []
+                    for matrix in matrices:
+                        _x = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                        _x = self.icomm_g.mpi_comm.reduce(_x)
+                        _xs[linkname].append(_x)
+
+            print('_reduce doing...', self.wcomm.rank)
+            _reduce(self.icomm_g, invs, self.gpu_buffer_inv_a,
+                    self.gpu_buffer_inv_b)
+            print('_reduce done', self.wcomm.rank)
+
+            if self.check_value:
+                for linkname, matrices in sorted(invs.items()):
+                    for i, matrix in enumerate(matrices):
+                        _x = _xs[linkname][i]
+                        _y = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                        np.testing.assert_array_almost_equal(_x, _y, decimal=5)
 
         if not self.is_inv_master and not self.is_grad_worker:
             return
 
+        if self.check_value:
+            _xs = {}
+            for linkname, matrices in sorted(invs.items()):
+                _xs[linkname] = []
+                for matrix in matrices:
+                    _x = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                    _x = self.gcomm_g.mpi_comm.bcast(_x)
+                    _xs[linkname].append(_x)
+
         # Broadcast inverse
-        for linkname, matrices in sorted(invs.items()):
-            for i, matrix in enumerate(matrices):
-                if self.check_value:
-                    x = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                    x = self.gcomm_g.mpi_comm.bcast(x)
-                matrix_link = DummyLink(matrix)
-                # Broadcast performs on either GPU or CPU
-                self.gcomm_g.broadcast_data(matrix_link)
-                matrix[:] = matrix_link.data
-                if self.check_value:
-                    y = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                    np.testing.assert_array_almost_equal(x, y)
+        print('_bcast doing...', self.wcomm.rank)
+        _bcast(self.gcomm_g, invs, self.gpu_buffer_inv_c)
+        print('_bcast done', self.wcomm.rank)
+
+        if self.check_value:
+            self.indecies = []
+            for linkname, matrices in sorted(invs.items()):
+                for i, matrix in enumerate(matrices):
+                    _x = _xs[linkname][i]
+                    _y = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                    try:
+                        np.testing.assert_array_almost_equal(_x, _y, decimal=5)
+                    except AssertionError as e:
+                        self.indecies.append((linkname, i))
+            if len(self.indecies) != 0:
+                print(self.indecies)
+                raise AssertionError('Uncorrect values')
 
     def allreduce_cov(self, covs):
         """Allreduce covariance matrices
@@ -388,10 +427,28 @@ Inv workers:  {}
         """
         if not self.is_cov_worker:
             return
-        for i, matrix in enumerate(covs):
-            matrix_link = DummyLink(matrix)
-            self.ccomm.allreduce_grad(matrix_link)
-            matrix[:] = matrix_link.data * len(self.cov_worker_ranks)
+
+        if self.check_value:
+            _xs = []
+            for i, matrix in enumerate(covs):
+                _x = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                _x = self.ccomm.mpi_comm.allreduce(_x)
+                _x /= self.ccomm.size
+                _x *= len(self.cov_worker_ranks)
+                _xs.append(_x)
+
+        covs_dictionary = {str(i): cov for i, cov in enumerate(covs)}
+        _allreduce(self.ccomm, covs_dictionary, self.gpu_buffer_cov_a,
+                   self.gpu_buffer_cov_b)
+        for matrix in covs:
+            matrix /= self.ccomm.size
+            matrix *= len(self.cov_worker_ranks)
+
+        if self.check_value:
+            for i, matrix in enumerate(covs):
+                _x = _xs[i]
+                _y = chainer.cuda.to_cpu(matrix).astype(np.float32)
+                np.testing.assert_array_almost_equal(_x, _y, decimal=5)
 
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
@@ -401,33 +458,23 @@ Inv workers:  {}
         Args:
             optimizer (chainer.Optimizer): KFAC optimizer.
         """
-        is_sender = self.is_grad_master
-        is_reciever = self.is_cov_worker
+        if not self.is_grad_master and not self.is_cov_worker:
+            return
 
-        if is_sender:
+        if self.is_grad_master:
             for cov_worker_rank in self.cov_worker_ranks:
                 _send_heartbeat(self.wcomm.mpi_comm, cov_worker_rank,
                                 tag=(100 * cov_worker_rank + 2))
-                # send parameter
-                for name, param in sorted(optimizer.target.namedparams()):
-                    data = param.data
-                    data = chainer.cuda.to_cpu(data).astype(np.float32)
-                    self.wcomm.send(data, cov_worker_rank, 0)
-        elif is_reciever:
+        elif self.is_cov_master:
             is_done = _recv_heartbeat(
                 self.wcomm.mpi_comm, self.grad_master_rank,
                 (100 * self.wcomm.rank + 2), self.timeout)
             if is_done:
                 return True
 
-            # recieve parameter
-            for name, param in sorted(optimizer.target.namedparams()):
-                data = self.wcomm.recv(self.grad_master_rank, 0)
-                with chainer.cuda.get_device_from_array(param.data) as dev:
-                    if dev.id < 0:
-                        param.data[:] = data
-                    else:
-                        param.data[:] = chainer.cuda.to_gpu(data)
+        print('_bcast...', self.wcomm.rank)
+        self.ccomm_g.broadcast_data(optimizer.target)
+        print('_bcast done', self.wcomm.rank)
 
     def sendrecv_cov_ema(self, cov_emas):
         """Send or recieve covariance EMAs
@@ -448,19 +495,13 @@ Inv workers:  {}
             for inv_worker_rank in self.inv_worker_ranks:
                 for linkname, matrices in sorted(cov_emas.items()):
                     for matrix in matrices:
-                        matrix = chainer.cuda.to_cpu(matrix).astype(np.float32)
-                        self.wcomm.send(matrix, inv_worker_rank,
-                                        (100 * inv_worker_rank + 3))
+                        _send(self.wcomm, matrix, self.inv_worker_rank,
+                              100 * inv_worker_rank + 4)
         elif self.is_inv_worker:
             for linkname, matrices in sorted(cov_emas.items()):
                 for matrix in matrices:
-                    data = self.wcomm.recv(self.cov_master_rank,
-                                           (100 * self.wcomm.rank + 3))
-                    with chainer.cuda.get_device_from_array(matrix) as dev:
-                        if dev.id < 0:
-                            matrix[:] = data
-                        else:
-                            matrix[:] = chainer.cuda.to_gpu(data)
+                    _recv(self.wcomm, matrix, self.cov_worker_rank,
+                          100 * self.wcomm.rank + 4)
 
 
 def _is_changed(optimizer):
@@ -474,6 +515,159 @@ def _is_changed(optimizer):
         if (param1[0] != param2[0]) or (param1[1] != param2[1]):
             return True
     return False
+
+
+def _send(comm, array, dest, tag):
+    """Send array
+
+    Args:
+        comm (chainermn.communicators.CommunicatorBase): ChainerMN communicator
+        array (numpy/cupy.array): Sending array
+        dest (int): Destination rank
+        tag (int): Tag which is used for MPI
+    """
+    array_cpu = chainer.cuda.to_cpu(array).astype(np.float32)
+    comm.mpi_comm.Send(array_cpu, dest=dest, tag=tag)
+
+
+def _recv(comm, array, source, tag):
+    """Recieve array
+
+    Args:
+        comm (chainermn.communicators.CommunicatorBase): ChainerMN communicator
+        array (numpy/cupy.array): Recieving array buffer
+        source (int): Source rank
+        tag (int): Tag which is used for MPI
+    """
+    array_cpu = chainer.cuda.to_cpu(array).astype(np.float32)
+    comm.mpi_comm.Recv(array_cpu, source=source, tag=tag)
+    with chainer.cuda.get_device_from_array(array) as dev:
+        if dev.id < 0:
+            array[:] = array_cpu
+        else:
+            array[:] = chainer.cuda.to_gpu(array_cpu)
+
+
+def _allreduce(comm, dictionary, gpu_buffer_a, gpu_buffer_b):
+    """Allreduce dictionary
+
+    Args:
+        comm (chainermn.communicators.CommunicatorBase): ChainerMN communicator
+        dictionary (dict(numpy/cupy.array)): Dictionary of buffer arrays
+        gpu_buffer_a (DeviceMemory): Device memory
+        gpu_buffer_b (DeviceMemory): Device memory
+    """
+    import mpi4py.MPI
+    init_comms = getattr(comm, '_init_comms')
+    init_comms()
+
+    arrays = []
+    for _, array in sorted(dictionary.items()):
+        if isinstance(array, list):
+            for _array in array:
+                arrays.append(_array)
+        else:
+            arrays.append(array)
+
+    itemsize = 4
+    n_elems_total = sum(array.size for array in arrays)
+    n_bytes_total = n_elems_total * itemsize
+    gpu_buffer_a.assign(n_bytes_total)
+    gpu_buffer_b.assign(n_bytes_total)
+
+    _pack(arrays, itemsize, gpu_buffer_a)
+
+    comm.mpi_comm.Allreduce(
+        [gpu_buffer_a.buffer(n_bytes_total), mpi4py.MPI.FLOAT],
+        [gpu_buffer_b.buffer(n_bytes_total), mpi4py.MPI.FLOAT])
+
+    _unpack(arrays, itemsize, gpu_buffer_b)
+
+
+def _reduce(comm, dictionary, gpu_buffer_a, gpu_buffer_b):
+    """Reduce dictionary
+
+    Args:
+        comm (chainermn.communicators.CommunicatorBase): ChainerMN communicator
+        dictionary (dict(numpy/cupy.array)): Dictionary of buffer arrays
+        gpu_buffer_a (DeviceMemory): Device memory
+        gpu_buffer_b (DeviceMemory): Device memory
+    """
+    import mpi4py.MPI
+    init_comms = getattr(comm, '_init_comms')
+    init_comms()
+
+    arrays = []
+    for _, array in sorted(dictionary.items()):
+        if isinstance(array, list):
+            for _array in array:
+                arrays.append(_array)
+        else:
+            arrays.append(array)
+
+    itemsize = 4
+    n_elems_total = sum(array.size for array in arrays)
+    n_bytes_total = n_elems_total * itemsize
+    gpu_buffer_a.assign(n_bytes_total)
+    gpu_buffer_b.assign(n_bytes_total)
+
+    _pack(arrays, itemsize, gpu_buffer_a)
+
+    comm.mpi_comm.Reduce(
+        [gpu_buffer_a.buffer(n_bytes_total), mpi4py.MPI.FLOAT],
+        [gpu_buffer_b.buffer(n_bytes_total), mpi4py.MPI.FLOAT])
+
+    _unpack(arrays, itemsize, gpu_buffer_b)
+
+
+def _bcast(comm, dictionary, gpu_buffer_a):
+    """Broadcast dictionary
+
+    Args:
+        comm (chainermn.communicators.CommunicatorBase): ChainerMN communicator
+        dictionary (dict(numpy/cupy.array)): Dictionary of buffer arrays
+        gpu_buffer_a (DeviceMemory): Device memory
+        gpu_buffer_b (DeviceMemory): Device memory
+    """
+    import mpi4py.MPI
+    init_comms = getattr(comm, '_init_comms')
+    init_comms()
+
+    arrays = []
+    for _, array in sorted(dictionary.items()):
+        if isinstance(array, list):
+            for _array in array:
+                arrays.append(_array)
+        else:
+            arrays.append(array)
+
+    itemsize = 4
+    n_elems_total = sum(array.size for array in arrays)
+    n_bytes_total = n_elems_total * itemsize
+    gpu_buffer_a.assign(n_bytes_total)
+
+    _pack(arrays, itemsize, gpu_buffer_a)
+
+    comm.mpi_comm.Bcast(
+        [gpu_buffer_a.buffer(n_bytes_total), mpi4py.MPI.FLOAT])
+
+    _unpack(arrays, itemsize, gpu_buffer_a)
+
+
+def _pack(arrays, itemsize, buf):
+    offset = 0
+    for array in arrays:
+        n_bytes = array.size * itemsize
+        buf.from_device(array, n_bytes, offset)
+        offset += n_bytes
+
+
+def _unpack(arrays, itemsize, buf):
+    offset = 0
+    for array in arrays:
+        n_bytes = array.size * itemsize
+        buf.to_device(array, n_bytes, offset)
+        offset += n_bytes
 
 
 def _send_heartbeat(comm, dest, tag):
