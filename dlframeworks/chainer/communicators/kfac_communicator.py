@@ -250,16 +250,6 @@ Inv workers:  {}
         self.inv_master_rank = inv_master_rank
         self.inv_worker_ranks = inv_worker_ranks
 
-        # _memory_utility module imports mpi4py.MPI inside, to avoid process
-        # fork, we will import this module here
-        from chainermn.communicators import _memory_utility
-        self.gpu_buffer_cov_a = _memory_utility.DeviceMemory()
-        self.gpu_buffer_cov_b = _memory_utility.DeviceMemory()
-        self.gpu_buffer_inv_a = _memory_utility.DeviceMemory()
-        self.gpu_buffer_inv_b = _memory_utility.DeviceMemory()
-        self.gpu_buffer_inv_c = _memory_utility.DeviceMemory()
-        self.gpu_buffer_param = _memory_utility.DeviceMemory()
-
     def allreduce_grad(self, optimizer):
         """Allreduce gradients calculated by backprop
 
