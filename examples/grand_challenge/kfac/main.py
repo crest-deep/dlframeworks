@@ -80,6 +80,7 @@ def main():
     parser.add_argument('--n-inv-workers', type=int, default=1)
     parser.add_argument('--join-cov', action='store_true')
     parser.add_argument('--npergroup', type=int, default=1)
+    parser.add_argument('--comm-core', default='gpu')
     parser.set_defaults(test=False)
     args = parser.parse_args()
 

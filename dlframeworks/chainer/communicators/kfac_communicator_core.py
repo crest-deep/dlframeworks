@@ -76,10 +76,10 @@ class GPUCommunicatorCore(object):
         comm.allreduce_grad(invs_chain)
         for linkname, matrices in sorted(invs.items()):
             for matrix in matrices:
-                matrix *= len(self.comm.icomm_g.size)
+                matrix *= self.comm.icomm_g.size
 
     def bcast_inv(self, invs):
-        comm = self.comm.icomm_g
+        comm = self.comm.gcomm_g
         init_comms = getattr(comm, '_init_comms')
         init_comms()
         invs_chain = DummyChain(invs)
@@ -96,7 +96,7 @@ class GPUCommunicatorCore(object):
         comm = self.comm.ccomm_g
         init_comms = getattr(comm, '_init_comms')
         init_comms()
-        comm.ccomm_g.broadcast_data(model)
+        comm.broadcast_data(model)
 
 
 class DummyLink(object):
@@ -133,9 +133,9 @@ class DummyChain(object):
 
     def unpack(self, data):
         if isinstance(data, dict):
-            _unpack_dict(data)
+            _unpack_dict(data, self._params)
         elif isinstance(data, list):
-            _unpack_list(data)
+            _unpack_list(data, self._params)
         else:
             raise ValueError('Invalid datatype: ', type(data))
 

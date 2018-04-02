@@ -314,7 +314,9 @@ Inv workers:  {}
         if not self.is_cov_worker:
             return
 
+        print('allreduce_cov...', self.wcomm.rank)
         self.comm_core.allreduce_cov(covs)
+        print('allreduce_cov done', self.wcomm.rank)
 
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
