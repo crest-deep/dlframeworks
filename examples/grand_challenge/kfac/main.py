@@ -18,14 +18,14 @@ import models_v2.googlenetbn as googlenetbn
 import models_v2.nin as nin
 import models_v2.resnet50 as resnet50
 
+import data as data_module
+import iterator as iterator_module
 
-def observe_hyperparam(name, trigger):
-    """
-    >>> trainer.extend(observe_hyperparam('alpha', (1, 'epoch')))
-    """
+
+def observe_hyperparam(name):
     def observer(trainer):
-        return trainer.updater.get_optimizer('main').__dict__[name]
-    return extensions.observe_value(name, observer, trigger=trigger)
+        return getattr(trainer.updater.get_optimizer('main'), name)
+    return extensions.observe_value(name, observer)
 
 
 # chainermn.create_multi_node_evaluator can be also used with user customized
@@ -78,11 +78,19 @@ def main():
     parser.add_argument('--damping', type=float, default=0.001)
     parser.add_argument('--inv_alg')
     parser.add_argument('--use_doubly_factored', action='store_true')
+    parser.add_argument('--cov-batchsize', type=int, default=16)
+    parser.add_argument('--n-cov-workers', type=int, default=1)
+    parser.add_argument('--n-inv-workers', type=int, default=1)
+    parser.add_argument('--join-cov', action='store_true')
+    parser.add_argument('--npergroup', type=int, default=1)
+    parser.add_argument('--comm-core', default='gpu')
+    parser.add_argument('--nclasses', type=int, default=8)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
     comm = dlframeworks.chainer.communicators.KFACCommunicator(
-        args.communicator, debug=True)
+        args.communicator, npergroup=args.npergroup, debug=True, timeout=300,
+        join_cov=args.join_cov, n_cov_workers=args.n_cov_workers)
     device = comm.wcomm.intra_rank  # GPU is related with intra rank
     chainer.cuda.get_device_from_id(device).use()
     model = archs[args.arch]()
@@ -130,47 +138,60 @@ def main():
         if comm.is_grad_worker:
             # Gradient worker
             # Load all dataset in memory
-            #dataset_class = dlframeworks.chainer.datasets.CroppingDataset
             dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
             sub_comm = comm.gcomm
+            batchsize = args.batchsize
         else:
             # Covariance worker
             # Load dataset in memory when needed
             dataset_class = dlframeworks.chainer.datasets.CroppingDatasetIO
             sub_comm = comm.ccomm
+            batchsize = args.cov_batchsize
 
         mean = np.load(args.mean)
 
         # ======== Create dataset ========
-        if comm.gcomm.rank == 0 or comm.ccomm.rank == 0:
-            train = dlframeworks.chainer.datasets.read_pairs(args.train)
-            val = dlframeworks.chainer.datasets.read_pairs(args.val)
+        if args.loadtype == 'archv':
+            train_dataset = data_module.read_from_archves(
+                comm.gcomm, args.train, args.nclasses, size=230, crop=True)
+            val_dataset = data_module.read_from_archves(
+                comm.gcomm, args.val, args.nclasses, size=230, crop=False)
         else:
-            train = None
-            val = None
-        train = chainermn.scatter_dataset(train, sub_comm, shuffle=True)
-        val = chainermn.scatter_dataset(val, sub_comm)
-        train_dataset = dataset_class(
-            train, args.train_root, mean, model.insize, model.insize)
-        val_dataset = dataset_class(
-            val, args.val_root, mean, model.insize, model.insize)
+            if comm.gcomm.rank == 0 or comm.ccomm.rank == 0:
+                train = dlframeworks.chainer.datasets.read_pairs(args.train)
+                val = dlframeworks.chainer.datasets.read_pairs(args.val)
+            else:
+                train = None
+                val = None
+            train = chainermn.scatter_dataset(train, sub_comm, shuffle=True)
+            val = chainermn.scatter_dataset(val, sub_comm)
+            train_dataset = dataset_class(
+                train, args.train_root, mean, model.insize, model.insize)
+            val_dataset = dataset_class(
+                val, args.val_root, mean, model.insize, model.insize)
 
         # ======== Create iterator ========
-        if args.iterator == 'process':
+        if args.loadtype == 'archv':
+            train_iterator = iterator_module.MyIterator(
+                train_dataset, batch_size=args.batchsize)
+            val_iterator = iterator_module.MyIterator(
+                val_dataset, batch_size=args.val_batchsize, repeat=False,
+                shuffle=False)
+        elif args.iterator == 'process':
             multiprocessing.set_start_method('forkserver')
             train_iterator = chainer.iterators.MultiprocessIterator(
-                train_dataset, args.batchsize, n_processes=args.loaderjob)
+                train_dataset, batchsize, n_processes=args.loaderjob)
             val_iterator = chainer.iterators.MultiprocessIterator(
                 val_dataset, args.val_batchsize, n_processes=args.loaderjob,
                 repeat=False)
         elif args.iterator == 'thread':
             train_iterator = chainer.iterators.MultithreadIterator(
-                train_dataset, args.batchsize, n_threads=args.loaderjob)
+                train_dataset, batchsize, n_threads=args.loaderjob)
             val_iterator = chainer.iterators.MultithreadIterator(
                 val_dataset, args.val_batchsize, n_threads=args.loaderjob,
                 repeat=False)
         else:
-            train_iterator = chainer.iterators.SerialIterator(train_dataset, args.batchsize)
+            train_iterator = chainer.iterators.SerialIterator(train_dataset, batchsize)
             val_iterator = chainer.iterators.SerialIterator(val_dataset, args.val_batchsize,
                                                             repeat=False, shuffle=False)
 
@@ -181,7 +202,7 @@ def main():
         # ======== Create trainer ========
         if comm.is_cov_worker:
             def stop_trigger(x):
-                if x.updater.get_optimizer('main').is_training_done:
+                if x.updater.get_optimizer('main').is_done:
                     return True
                 else:
                     return False
@@ -205,6 +226,10 @@ def main():
                 trainer.extend(extensions.dump_graph('main/loss'))
                 trainer.extend(extensions.LogReport(trigger=log_interval))
                 trainer.extend(extensions.observe_lr(), trigger=log_interval)
+                trainer.extend(observe_hyperparam('momentum'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('cov_ema_decay'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('inv_freq'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('damping'), trigger=log_interval)
                 trainer.extend(extensions.PrintReport([
                     'epoch', 'iteration', 'main/loss', 'validation/main/loss',
                     'main/accuracy', 'validation/main/accuracy', 'lr'
@@ -221,8 +246,8 @@ def main():
         # Inverse worker
         # ======== Create optimizer ========
         while True:
-            is_training_done = optimizer.update()
-            if is_training_done:
+            optimizer.update()
+            if optimizer.is_done:
                 break
         print('Inverse done')
 

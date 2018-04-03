@@ -1,1 +1,49 @@
-../chainer/config_kfc.yaml
+nnodes: 2
+walltime: 05:30:00
+jobname: imagenet
+stdout: "%A.o.log"
+stderr: "%A.e.log"
+
+modules:
+  cuda: cuda/9.0
+  nccl: local/nccl/2.1.15/cuda-9.0
+  cudnn: local/cudnn/7.1/cuda-9.0
+  mpi: local/openmpi/2.1.3/cuda-9.0
+
+vars: ./modules.sh
+
+# Hyper-parameters
+lr: 0.001
+momentum: 0.9
+cov_ema_decay: 0.99
+inv_freq: 4
+damping: 0.005
+inv_alg: null
+use_doubly_factored: null
+cov_batchsize: 16
+n_cov_workers: 4
+n_inv_workers: 1
+join_cov: true
+npergroup: 2
+comm_core: gpu
+
+nclasses: 8
+mean: mean.npy
+
+train:      /home/share/ILSVRC2012/labels/train008.txt
+train_root: /home/share/ILSVRC2012/ILSVRC2012_img_train
+val:        /home/share/ILSVRC2012/labels/val008.txt
+val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
+arch: resnet50
+epoch: 10
+batchsize: 32
+loaderjob: 8
+out: /home/users/Yohei/results/dlframeworks
+resume: null
+initmodel: null
+test: null
+
+communicator: hierarchical
+loadtype: development
+iterator: thread
+optimizer: momentum_sgd

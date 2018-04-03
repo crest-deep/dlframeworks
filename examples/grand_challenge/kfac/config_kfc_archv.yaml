@@ -30,9 +30,9 @@ comm_core: gpu
 nclasses: 8
 mean: mean.npy
 
-train:      /home/share/ILSVRC2012/labels/train008.txt
+train:      /home/share/ILSVRC2012/by_class/train
 train_root: /home/share/ILSVRC2012/ILSVRC2012_img_train
-val:        /home/share/ILSVRC2012/labels/val008.txt
+val:        /home/share/ILSVRC2012/by_class/val
 val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
 arch: resnet50
 epoch: 10
@@ -44,6 +44,7 @@ initmodel: null
 test: null
 
 communicator: hierarchical
-loadtype: development
+loadtype: archv
 iterator: thread
 optimizer: momentum_sgd
+

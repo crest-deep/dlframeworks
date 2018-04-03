@@ -335,7 +335,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.conv_args_dict = {}
         self.inv_alg = inv_alg
 
-        self.is_training_done = False
+        self.is_done = False
         self.times = collections.defaultdict(lambda: 0)
 
         # TODO Initialize below with all batch
@@ -375,13 +375,10 @@ class KFAC(chainer.optimizer.GradientMethod):
         else:
             if comm.is_grad_worker:
                 self.grad_update(lossfun, *args, **kwds)
-            elif comm.is_cov_worker:
-                is_training_done = self.cov_ema_update(lossfun, *args, **kwds)
-                self.is_training_done = is_training_done
-            else:
-                is_training_done = self.inv_update()
-                self.is_training_done = is_training_done
-                return is_training_done
+            if comm.is_cov_worker:
+                self.is_done = self.cov_ema_update(lossfun, *args, **kwds)
+            if comm.is_inv_worker:
+                self.is_done = self.inv_update()
 
     def grad_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
@@ -406,7 +403,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 if not synced:
                     return
                 if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
-                    if self.t_inv == 0:
+                    if self.t_inv == 0 and not comm.is_inv_worker:
                         self.inv_dict = self.allocate_matrices()
                     comm.bcast_inv(self.inv_dict)
                     self.t_inv += 1
@@ -462,17 +459,17 @@ class KFAC(chainer.optimizer.GradientMethod):
                 if isinstance(link, _linear_link):
                     n_out, n_in = param_W.shape
                     if param_b is not None:
-                        A = xp.empty((n_in + 1, n_in + 1))
+                        A = xp.zeros((n_in + 1, n_in + 1))
                     else:
-                        A = xp.empty((n_in, n_in))
-                    G = xp.empty((n_out, n_out))
+                        A = xp.zeros((n_in, n_in))
+                    G = xp.zeros((n_out, n_out))
                 elif isinstance(link, _convolution_2d_link):
                     c_out, c_in, kh, kw = param_W.shape
                     if param_b is not None:
-                        A = xp.empty((c_in*kh*kw + 1, c_in*kh*kw + 1))
+                        A = xp.zeros((c_in*kh*kw + 1, c_in*kh*kw + 1))
                     else:
-                        A = xp.empty((c_in*kh*kw, c_in*kh*kw))
-                    G = xp.empty((c_out, c_out))
+                        A = xp.zeros((c_in*kh*kw, c_in*kh*kw))
+                    G = xp.zeros((c_out, c_out))
                 else:
                     continue
             dictionary[linkname] = [A, G]
@@ -481,6 +478,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def cov_ema_update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
+        if self.t_cov == 0:
+            self.cov_ema_dict = self.allocate_matrices()
         # ======== Communication
         if comm is not None:
             is_done = comm.sendrecv_param(self)
@@ -536,11 +535,26 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         # ======== Communication
         if comm is not None:
-            if self.t_inv == 0:
+            if self.t_inv == 0 and not comm.is_cov_worker:
                 self.cov_ema_dict = self.allocate_matrices()
             comm.sendrecv_cov_ema(self.cov_ema_dict)
-        for linkname, emas in self.cov_ema_dict.items():
+
+        if comm is not None and len(comm.inv_worker_ranks) > 1:
+            index = comm.inv_worker_ranks.index(comm.wcomm.rank)
+            keys = numpy.array(sorted(list(self.cov_ema_dict.keys())))
+            keys = numpy.array_split(keys, len(comm.inv_worker_ranks))
+            my_keys = list(keys[index])
+            self.inv_dict = self.allocate_matrices()
+        else:
+            my_keys = list(self.cov_ema_dict.keys())
+
+        for key in my_keys:
+            linkname = key
+            emas = self.cov_ema_dict[key]
             self.inv_update_core(linkname, emas)
+
+        #for linkname, emas in self.cov_ema_dict.items():
+        #    self.inv_update_core(linkname, emas)
         self.t_inv += 1
         # ======== Communication
         if comm is not None:

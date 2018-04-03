@@ -24,7 +24,7 @@ def parse_options(options):
     if hostname == 'kfc.r.gsic.titech.ac.jp':
         shell_script = """\
 #!/bin/sh
-#SBATCH --nodes={nnodes}
+#SBATCH --nodes=1
 #SBATCH --job-name={jobname}
 #SBATCH --time={walltime}
 #SBATCH --exclude=kfc039
@@ -36,7 +36,7 @@ def parse_options(options):
         shell_script = """\
 #!/bin/sh
 #$ -cwd
-#$ -l {nodetype}={nnodes}
+#$ -l q_node=1
 #$ -l h_rt={walltime}
 #$ -N {jobname}
 #$ -o {result_direcory}/$JOB_ID.log
@@ -81,49 +81,29 @@ echo "................................"
 
 export CUDA_CACHE_DISABLE=1
 
-mpirun \\
-  -npernode {npernode} \\
-  -np {np} \\
-  -output-proctable \\
-  -mca pml ob1 \\
-  -x PATH \\
-  -x LD_LIBRARY_PATH \\
-  -x CUDA_CACHE_DISABLE \\
-  -x CUDA_HOME \\
-  -x CUDA_PATH \\
-  -x CUDA_TOP \\
-  -x NCCL_IB_CUDA_SUPPORT \\
-  -x NCCL_IB_SL \\
-  python -W ignore ./main.py \\
-    {train} \\
-    {val} \\
-    --train-root {train_root} \\
-    --val-root {val_root} \\
-    --arch {arch} \\
-    --batchsize {batchsize} \\
-    --epoch {epoch} \\
-    --loaderjob {loaderjob} \\
-    --mean {mean} \\
-    --out {result_direcory} \\
-    --communicator {communicator} \\
-    --loadtype {loadtype} \\
-    --iterator {iterator} \\
-    --optimizer {optimizer} \\
-    --lr {lr} \\
-    --momentum {momentum} \\
-    --cov_ema_decay {cov_ema_decay} \\
-    --inv_freq {inv_freq} \\
-    --damping {damping} \\
-    --inv_alg {inv_alg} \\
-    --cov-batchsize {cov_batchsize} \\
-    --n-cov-workers {n_cov_workers} \\
-    --n-inv-workers {n_inv_workers} \\
-    --npergroup {npergroup} \\
-    --comm-core {comm_core} \\
-    --nclasses {nclasses} \\
+python -W ignore ./main_singlenode.py \\
+  {train} \\
+  {val} \\
+  --train-root {train_root} \\
+  --val-root {val_root} \\
+  --arch {arch} \\
+  --batchsize {batchsize} \\
+  --epoch {epoch} \\
+  --loaderjob {loaderjob} \\
+  --mean {mean} \\
+  --out {result_direcory} \\
+  --communicator {communicator} \\
+  --loadtype {loadtype} \\
+  --iterator {iterator} \\
+  --optimizer {optimizer} \\
+  --lr {lr} \\
+  --momentum {momentum} \\
+  --cov_ema_decay {cov_ema_decay} \\
+  --inv_freq {inv_freq} \\
+  --damping {damping} \\
+  --inv_alg {inv_alg} \\
+  --cov-batchsize {cov_batchsize} \\
 """.format(**options)
-    if options['join_cov'] is not None:
-        shell_script += '    --join-cov \\\n'.format(**options)
     if options['use_doubly_factored'] is not None:
         shell_script += '    --use_doubly_factored \\\n'.format(**options)
     if options['initmodel'] is not None:
@@ -145,7 +125,7 @@ echo "Job ended on $(date)"
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--config', default='config.yaml')
-    parser.add_argument('-o', '--out', default='main.sh')
+    parser.add_argument('-o', '--out', default='main_singlenode.sh')
     args = parser.parse_args()
 
     options = preprocess_core.load_options(args.config)
@@ -172,8 +152,10 @@ def main():
         os.unlink(latest_dst)
     os.symlink(src_dst, latest_dst)
 
+
     print(os.path.join(src_dst, args.out))  # Stdout is passed to `submit` script.
 
 
 if __name__ == '__main__':
     main()
+

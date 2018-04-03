@@ -110,14 +110,7 @@ mpirun \\
     --iterator {iterator} \\
     --optimizer {optimizer} \\
     --lr {lr} \\
-    --momentum {momentum} \\
-    --cov_ema_decay {cov_ema_decay} \\
-    --inv_freq {inv_freq} \\
-    --damping {damping} \\
-    --inv_alg {inv_alg} \\
 """.format(**options)
-    if options['use_doubly_factored'] is not None:
-        shell_script += '    --use_doubly_factored \\\n'.format(**options)
     if options['initmodel'] is not None:
         shell_script += '    --initmodel {initmodel} \\\n'.format(**options)
     if options['resume'] is not None:
