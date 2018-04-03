@@ -49,7 +49,7 @@ class LinearFunction(function_node.FunctionNode):
             b = inputs[2]
             y += b
         self.retain_inputs((0, 1))  # b is not retained
-        self.retain_outputs((0,))  # retain output for K-FAC backward
+        self.retain_outputs((0,)) 
         return y,
 
     def backward(self, indexes, grad_outputs):

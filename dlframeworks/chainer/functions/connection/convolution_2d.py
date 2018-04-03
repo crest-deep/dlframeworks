@@ -117,7 +117,7 @@ class Convolution2DFunction(function_node.FunctionNode):
 
     def forward_cpu(self, inputs):
         self.retain_inputs((0, 1))  # retain only x and W
-        self.retain_outputs((0,))  # retain output for K-FAC backward
+        self.retain_outputs((0,)) 
 
         if len(inputs) == 2:
             (x, W), b = inputs, None
@@ -144,8 +144,7 @@ class Convolution2DFunction(function_node.FunctionNode):
 
     def forward_gpu(self, inputs):
         self.retain_inputs((0, 1))  # retain only x and W
-        self.retain_outputs((0,))  # retain output for K-FAC backward
-
+        self.retain_outputs((0,))  
         if len(inputs) == 2:
             (x, W), b = inputs, None
         else:
