@@ -132,6 +132,7 @@ def main():
         use_doubly_factored=args.use_doubly_factored,
     )
     # damping ~ 0.035 is good
+    optimizer.add_hook(chainer.optimizer.WeightDecay(args.weight_decay))
     optimizer.setup(model)
 
 
