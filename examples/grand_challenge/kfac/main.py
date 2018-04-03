@@ -85,6 +85,7 @@ def main():
     parser.add_argument('--npergroup', type=int, default=1)
     parser.add_argument('--comm-core', default='gpu')
     parser.add_argument('--nclasses', type=int, default=8)
+    parser.add_argument('--weight_decay', type=float, default=0.00022)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
