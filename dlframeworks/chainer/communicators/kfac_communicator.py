@@ -371,7 +371,7 @@ Inv workers:  {}
             for linkname, matrices in sorted(cov_emas.items()):
                 for matrix in matrices:
                     print('_recv...', self.wcomm.rank)
-                    _recv(self.wcomm, matrix, self.cov_worker_rank,
+                    _recv(self.wcomm, matrix, self.cov_master_rank,
                           100 * self.wcomm.rank + 4)
                     print('_recv done', self.wcomm.rank)
 
