@@ -226,8 +226,10 @@ def main():
                 trainer.extend(extensions.dump_graph('main/loss'))
                 trainer.extend(extensions.LogReport(trigger=log_interval))
                 trainer.extend(extensions.observe_lr(), trigger=log_interval)
-                trainer.extend(observe_hyperparam('damping'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('momentum'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('cov_ema_decay'), trigger=log_interval)
                 trainer.extend(observe_hyperparam('inv_freq'), trigger=log_interval)
+                trainer.extend(observe_hyperparam('damping'), trigger=log_interval)
                 trainer.extend(extensions.PrintReport([
                     'epoch', 'iteration', 'main/loss', 'validation/main/loss',
                     'main/accuracy', 'validation/main/accuracy', 'lr'
