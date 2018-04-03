@@ -86,6 +86,7 @@ mpirun \\
   -np {np} \\
   -output-proctable \\
   -mca pml ob1 \\
+  -hostfile hosts \\
   -x PATH \\
   -x LD_LIBRARY_PATH \\
   -x CUDA_CACHE_DISABLE \\
@@ -172,7 +173,9 @@ def main():
         os.unlink(latest_dst)
     os.symlink(src_dst, latest_dst)
 
-    print(os.path.join(src_dst, args.out))  # Stdout is passed to `submit` script.
+    #print(os.path.join(src_dst, args.out))  # Stdout is passed to `submit` script.
+    dirname = os.path.dirname(os.path.join(src_dst, args.out))
+    print(dirname)
 
 
 if __name__ == '__main__':

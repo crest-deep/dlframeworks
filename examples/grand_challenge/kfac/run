@@ -1,0 +1,6 @@
+#!/bin/bash
+set -eu
+
+
+DIRname=$(python preprocess.py --config=config_t3.yaml)
+nohup sh $DIRname/main.sh >& $DIRname/result/out.log &

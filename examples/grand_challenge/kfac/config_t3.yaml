@@ -1,5 +1,5 @@
 nodetype: f_node
-nnodes: 1
+nnodes: 4
 walltime: 00:30:00
 jobname: imagenet
 stdout: $JOB_ID.o.log
@@ -16,7 +16,7 @@ modules:
 vars: ./modules.sh
 
 # Hyper-parameters
-lr: 0.001
+lr: 0.01
 momentum: 0.9
 cov_ema_decay: 0.99
 inv_freq: 4
@@ -34,11 +34,11 @@ nclasses: 8
 mean: mean.npy
 
 train:      /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/train008.txt
-train_root: /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/train
 val:        /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/val008.txt
-val_root:   /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/val
+train_root: /scr/gc18sp01/data/ilsvrc12/train_raw
+val_root:   /scr/gc18sp01/data/ilsvrc12/val_raw
 arch: resnet50
-epoch: 2
+epoch: 10
 batchsize: 64
 loaderjob: 8
 #out: /gs/hs0/tgb-crest-deep/17M30275/results/tgc
@@ -48,7 +48,7 @@ resume: null
 initmodel: null
 test: null
 
-communicator: hierarchical
+communicator: pure_nccl
 loadtype: development
 iterator: thread
 optimizer: kfac
