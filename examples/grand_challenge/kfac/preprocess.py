@@ -119,6 +119,7 @@ mpirun \\
     --n-inv-workers {n_inv_workers} \\
     --npergroup {npergroup} \\
     --comm-core {comm_core} \\
+    --nclasses {nclasses} \\
 """.format(**options)
     if options['join_cov'] is not None:
         shell_script += '    --join-cov \\\n'.format(**options)

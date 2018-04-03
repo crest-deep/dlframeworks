@@ -18,6 +18,9 @@ import models_v2.googlenetbn as googlenetbn
 import models_v2.nin as nin
 import models_v2.resnet50 as resnet50
 
+import data as data_module
+import iterator as iterator_module
+
 
 def observe_hyperparam(name):
     def observer(trainer):
@@ -81,6 +84,7 @@ def main():
     parser.add_argument('--join-cov', action='store_true')
     parser.add_argument('--npergroup', type=int, default=1)
     parser.add_argument('--comm-core', default='gpu')
+    parser.add_argument('--nclasses', type=int, default=8)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
@@ -147,21 +151,33 @@ def main():
         mean = np.load(args.mean)
 
         # ======== Create dataset ========
-        if comm.gcomm.rank == 0 or comm.ccomm.rank == 0:
-            train = dlframeworks.chainer.datasets.read_pairs(args.train)
-            val = dlframeworks.chainer.datasets.read_pairs(args.val)
+        if args.loadtype == 'archv':
+            train_dataset = data_module.read_from_archves(
+                comm.gcomm, args.train, args.nclasses, size=230, crop=True)
+            val_dataset = data_module.read_from_archves(
+                comm.gcomm, args.val, args.nclasses, size=230, crop=False)
         else:
-            train = None
-            val = None
-        train = chainermn.scatter_dataset(train, sub_comm, shuffle=True)
-        val = chainermn.scatter_dataset(val, sub_comm)
-        train_dataset = dataset_class(
-            train, args.train_root, mean, model.insize, model.insize)
-        val_dataset = dataset_class(
-            val, args.val_root, mean, model.insize, model.insize)
+            if comm.gcomm.rank == 0 or comm.ccomm.rank == 0:
+                train = dlframeworks.chainer.datasets.read_pairs(args.train)
+                val = dlframeworks.chainer.datasets.read_pairs(args.val)
+            else:
+                train = None
+                val = None
+            train = chainermn.scatter_dataset(train, sub_comm, shuffle=True)
+            val = chainermn.scatter_dataset(val, sub_comm)
+            train_dataset = dataset_class(
+                train, args.train_root, mean, model.insize, model.insize)
+            val_dataset = dataset_class(
+                val, args.val_root, mean, model.insize, model.insize)
 
         # ======== Create iterator ========
-        if args.iterator == 'process':
+        if args.loadtype == 'archv':
+            train_iterator = iterator_module.MyIterator(
+                train_dataset, batch_size=args.batchsize)
+            val_iterator = iterator_module.MyIterator(
+                val_dataset, batch_size=args.val_batchsize, repeat=False,
+                shuffle=False)
+        elif args.iterator == 'process':
             multiprocessing.set_start_method('forkserver')
             train_iterator = chainer.iterators.MultiprocessIterator(
                 train_dataset, batchsize, n_processes=args.loaderjob)

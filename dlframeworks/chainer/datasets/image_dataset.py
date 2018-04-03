@@ -1,4 +1,5 @@
 import chainer
+import glob
 import math
 import numpy as np
 import os
@@ -192,3 +193,44 @@ def _read_image(path, crop_h, crop_w, dtype):
         im.close()
         del im
     return image
+
+
+class ArchivedCroppingDataset(chainer.dataset.DatasetMixin):
+    """Under construction !!!
+
+    """
+    def __init__(self, comm, path, n_classes, pairs, root, mean, crop_h,
+                 crop_w, random=True, image_dtype=np.float32,
+                 label_dtype=np.int32):
+        self._comm = comm
+        self._path = path
+        self._n_classes = n_classes
+        self._pairs = pairs
+        self._root = root
+        self._mean = mean.astype('f')
+        self._crop_h = crop_h
+        self._crop_w = crop_w
+        self._random = random
+        self._image_dtype = image_dtype
+        self._label_dtype = label_dtype
+
+    def _prepare(self):
+        comm = self._comm
+        path = self._path
+        n_classes = self._n_classes
+        ranks = comm.mpi_comm.allgather(
+            comm.rank if os.path.isdir(path) else -1)
+        ranks = [i for i in ranks if i >= 0]
+        ranks.sort()
+
+        if comm.rank == ranks[0]:
+            tarfiles = glob.glob(path)
+            tarfiles = [i for i in tarfiles if
+                        int(i.split('_')[-2]) < n_classes]
+        comm.Barrier()
+
+    def _shuffle(self, tarfiles):
+        comm = self._comm
+        rank = self._comm.rank
+        size = self._comm.size
+        ranks = comm.mpi_comm.allgather(rank)
