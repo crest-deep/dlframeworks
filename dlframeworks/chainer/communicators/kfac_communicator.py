@@ -411,7 +411,7 @@ Inv workers:  {}
                 for linkname, matrices in sorted(cov_emas.items()):
                     for matrix in matrices:
                         print('_send...', self.wcomm.rank)
-                        _send(self.wcomm, matrix, self.inv_worker_rank,
+                        _send(self.wcomm, matrix, self.inv_master_rank,
                               100 * inv_worker_rank + 4)
                         print('_send done', self.wcomm.rank)
         elif self.is_inv_worker:

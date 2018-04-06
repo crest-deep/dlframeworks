@@ -87,6 +87,7 @@ def main():
     parser.add_argument('--npergroup', type=int, default=1)
     parser.add_argument('--comm-core', default='gpu')
     parser.add_argument('--nclasses', type=int, default=8)
+    parser.add_argument('--weight_decay', type=float, default=0.00022)
     parser.set_defaults(test=False)
     args = parser.parse_args()
 
@@ -134,7 +135,7 @@ def main():
     )
     # damping ~ 0.035 is good
     optimizer.setup(model)
-    optimizer.add_hook(chainer.optimizer.WeightDecay(0.00022))
+    optimizer.add_hook(chainer.optimizer.WeightDecay(args.weight_decay))
 
     if comm.is_grad_worker or comm.is_cov_worker:
         if comm.is_grad_worker:
