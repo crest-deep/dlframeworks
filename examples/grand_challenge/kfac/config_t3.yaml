@@ -1,6 +1,6 @@
 nodetype: f_node
 nnodes: 4
-walltime: 00:30:00
+walltime: 00:20:00
 jobname: imagenet
 stdout: $JOB_ID.o.log
 stderr: $JOB_ID.e.log
@@ -11,26 +11,26 @@ modules:
   cuda: cuda/8.0.61
   nccl: nccl/local/2.1.15
   cudnn: cudnn/7.0
-  mpi: openmpi/2.1.2/cuda-8.0.61/thread
+  mpi: openmpi/2.1.2-thread-multiple
 
 vars: ./modules.sh
 
 # Hyper-parameters
-lr: 0.01
+lr: 0.1
 momentum: 0.9
 cov_ema_decay: 0.99
-inv_freq: 4
-damping: 0.005
+inv_freq: 2
+damping: 0.035
 inv_alg: null
 use_doubly_factored: null
-cov_batchsize: 16
-n_cov_workers: 4
+cov_batchsize: 64
+n_cov_workers: 48
 n_inv_workers: 1
 join_cov: true
-npergroup: 2
+npergroup: 4
 comm_core: gpu
 
-nclasses: 8
+nclasses: 1000
 mean: mean.npy
 
 train:      /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/train008.txt
@@ -38,17 +38,17 @@ val:        /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/val008.txt
 train_root: /scr/gc18sp01/data/ilsvrc12/train_raw
 val_root:   /scr/gc18sp01/data/ilsvrc12/val_raw
 arch: resnet50
-epoch: 10
+epoch: 5
 batchsize: 64
 loaderjob: 8
-#out: /gs/hs0/tgb-crest-deep/17M30275/results/tgc
-out: /gs/hs1/tge-gc18sp01/results/kfac/tsuji
+out: /gs/hs0/tgb-crest-deep/17M30275/results/tgc
+#out: /gs/hs1/tge-gc18sp01/results/kfac/final
 resume: null
 #initmodel: /gs/hs0/tgb-crest-deep/17M30275/datasets/initmodels/resnet50.npz
 initmodel: null
 test: null
 
-communicator: pure_nccl
+communicator: hierarchical
 loadtype: development
 iterator: thread
 optimizer: kfac

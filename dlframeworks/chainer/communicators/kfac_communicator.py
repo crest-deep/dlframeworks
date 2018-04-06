@@ -1,6 +1,7 @@
 import argparse
 import chainer
 import chainermn
+import collections
 import numpy as np
 import time
 
@@ -58,8 +59,12 @@ class KFACCommunicator(object):
             print_mpi = _create_print_mpi(mpi_comm)
 
         # World communicator which all processes contains
+        if debug:
+            print_mpi('Creating ChainerMN communicator')
         wcomm = chainermn.create_communicator(
             communicator_name=communicator_name, mpi_comm=mpi_comm)
+        if debug:
+            print_mpi('Creating ChainerMN communicator done!')
 
         if not isinstance(n_cov_workers, int) or n_cov_workers < 1:
             raise ValueError('Number of cov_worker must be positive int')
@@ -131,28 +136,6 @@ class KFACCommunicator(object):
                 if is_inv_master:
                     is_inv_master = 0
 
-        # Communicator for all gradient workers
-        gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
-
-        # Communicator for all covariance workers
-        ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
-
-        # Communicator for all covariance workers and gradient master in a
-        # group
-        color = (group_inter_rank + 1) * (is_grad_master | is_cov_worker)
-        key = 0 if is_grad_master else wcomm.rank + 1
-        ccomm_g = wcomm.split(color=color, key=key)
-
-        # Communicator for all inverse workers in a group
-        color = (group_inter_rank + 1) * is_inv_worker
-        key = 0 if is_inv_master else wcomm.rank + 1
-        icomm_g = wcomm.split(color=color, key=key)
-
-        # Communicator for inverse master and all gradient workers in a group
-        color = (group_inter_rank + 1) * (is_grad_worker | is_inv_master)
-        key = 0 if is_inv_master else wcomm.rank + 1
-        gcomm_g = wcomm.split(color=color, key=key)
-
         send_buf = [
             is_grad_master,
             is_grad_worker,
@@ -220,6 +203,60 @@ Inv workers:  {}
                 inv_master_rank,
                 inv_worker_ranks))
 
+        wcomm.mpi_comm.Barrier()
+
+        if debug:
+            print_mpi('Creating gcomm')
+        # Communicator for all gradient workers
+        gcomm = wcomm.split(color=is_grad_worker, key=wcomm.rank)
+        if debug:
+            print_mpi('Creating gcomm done!')
+
+        wcomm.mpi_comm.Barrier()
+
+        if debug:
+            print_mpi('Creating ccomm')
+        # Communicator for all covariance workers
+        ccomm = wcomm.split(color=is_cov_worker, key=wcomm.rank)
+        if debug:
+            print_mpi('Creating ccomm done!')
+
+        wcomm.mpi_comm.Barrier()
+
+        # Communicator for all covariance workers and gradient master in a
+        # group
+        if debug:
+            print_mpi('Creating ccomm_g')
+        color = (group_inter_rank + 1) * (is_grad_master | is_cov_worker)
+        key = 0 if is_grad_master else wcomm.rank + 1
+        ccomm_g = wcomm.split(color=color, key=key)
+        if debug:
+            print_mpi('Creating ccomm_g done!')
+
+        wcomm.mpi_comm.Barrier()
+
+        # Communicator for all inverse workers in a group
+        if debug:
+            print_mpi('Creating icomm_g')
+        color = (group_inter_rank + 1) * is_inv_worker
+        key = 0 if is_inv_master else wcomm.rank + 1
+        icomm_g = wcomm.split(color=color, key=key)
+        if debug:
+            print_mpi('Creating icomm_g done!')
+
+        wcomm.mpi_comm.Barrier()
+
+        # Communicator for inverse master and all gradient workers in a group
+        if debug:
+            print_mpi('Creating gcomm_g')
+        color = (group_inter_rank + 1) * (is_grad_worker | is_inv_master)
+        key = 0 if is_inv_master else wcomm.rank + 1
+        gcomm_g = wcomm.split(color=color, key=key)
+        if debug:
+            print_mpi('Creating gcomm_g done!')
+
+        wcomm.mpi_comm.Barrier()
+
         self.timeout = timeout
         self.join_cov = join_cov
 
@@ -250,6 +287,8 @@ Inv workers:  {}
         self.inv_master_rank = inv_master_rank
         self.inv_worker_ranks = inv_worker_ranks
 
+        self.times = collections.defaultdict(lambda: [])
+
     def allreduce_grad(self, optimizer):
         """Allreduce gradients calculated by backprop
 
@@ -266,7 +305,9 @@ Inv workers:  {}
             self.gcomm.broadcast_data(optimizer.target)
             return False
         else:
+            s_time = time.time()
             self.gcomm.allreduce_grad(optimizer.target)
+            self.times['allreduce_grad'].append(time.time() - s_time)
             return True
 
     def bcast_inv(self, invs):
@@ -275,7 +316,7 @@ Inv workers:  {}
         Inverse master sends A^-1 and G^-1 to all gradient workers.
 
         Args:
-            invs (OrderedDict(str, list(numpy/cupy.array))): Send buffer or
+            invs (dict(str, list(numpy/cupy.array))): Send buffer or
                 recieve buffer of inverse matrices.
         """
         if not self.is_grad_worker and not self.is_inv_worker:
@@ -294,14 +335,18 @@ Inv workers:  {}
 
         if self.is_inv_worker:
             print('reduce_inv...', self.wcomm.rank)
+            s_time = time.time()
             self.comm_core.reduce_inv(invs)
+            self.times['reduce_inv'].append(time.time() - s_time)
             print('reduce_inv done', self.wcomm.rank)
 
         if not self.is_inv_master and not self.is_grad_worker:
             return
 
         print('bcast_inv...', self.wcomm.rank)
+        s_time = time.time()
         self.comm_core.bcast_inv(invs)
+        self.times['bcast_inv'].append(time.time() - s_time)
         print('bcast_inv done', self.wcomm.rank)
 
     def allreduce_cov(self, covs):
@@ -314,9 +359,9 @@ Inv workers:  {}
         if not self.is_cov_worker:
             return
 
-        print('allreduce_cov...', self.wcomm.rank)
+        s_time = time.time()
         self.comm_core.allreduce_cov(covs)
-        print('allreduce_cov done', self.wcomm.rank)
+        self.times['allreduce_cov'].append(time.time() - s_time)
 
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
@@ -341,7 +386,9 @@ Inv workers:  {}
                 return True
 
         print('bcast_param...', self.wcomm.rank)
+        s_time = time.time()
         self.comm_core.bcast_param(optimizer.target)
+        self.times['bcast_param'].append(time.time() - s_time)
         print('bcast_param done', self.wcomm.rank)
 
     def sendrecv_cov_ema(self, cov_emas):

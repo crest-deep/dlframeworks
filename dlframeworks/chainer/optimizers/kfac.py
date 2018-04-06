@@ -374,10 +374,16 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.inv_update()
         else:
             if comm.is_grad_worker:
+                if comm.gcomm.rank == 0:
+                    print('grad_update()')
                 self.grad_update(lossfun, *args, **kwds)
             if comm.is_cov_worker:
+                if comm.ccomm.rank == 0:
+                    print('cov_ema_update()')
                 self.is_done = self.cov_ema_update(lossfun, *args, **kwds)
             if comm.is_inv_worker:
+                if comm.icomm_g.rank == 0:
+                    print('inv_update()')
                 self.is_done = self.inv_update()
 
     def grad_update(self, lossfun=None, *args, **kwds):
