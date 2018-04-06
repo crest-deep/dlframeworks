@@ -73,17 +73,55 @@ class GPUCommunicatorCore(object):
         init_comms = getattr(comm, '_init_comms')
         init_comms()
         invs_chain = DummyChain(invs)
+        for paramname, param in sorted(invs_chain.namedparams()):
+            for rank in range(comm.size):
+                if comm.rank == rank:
+                    print('RANK: {}, PARAMNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, paramname, param.grad..mean(), param.grad.max(), param.grad.min()))
+                comm.mpi_comm.Barrier()
+
+        #for linkname, matrices in sorted(invs.items()):
+        #    for matrix in matrices:
+        #        for rank in range(comm.size):
+        #            if comm.rank == rank:
+        #                print('RANK: {}, LINKNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, linkname, matrix.mean(), matrix.max(), matrix.min()))
+        #            comm.mpi_comm.Barrier()
         comm.allreduce_grad(invs_chain)
-        for linkname, matrices in sorted(invs.items()):
-            for matrix in matrices:
-                matrix *= self.comm.icomm_g.size
+        for rank in range(comm.size):
+            if comm.rank == rank:
+                keys = [k for k, v in sorted(invs_chain.namedparams())]
+                print(keys)
+            comm.mpi_comm.Barrier()
+        #for linkname, matrices in sorted(invs.items()):
+        #    for matrix in matrices:
+        #        matrix *= self.comm.icomm_g.size
+        #        for rank in range(comm.size):
+        #            if comm.rank == rank:
+        #                print('RANK: {}, LINKNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, linkname, matrix.mean(), matrix.max(), matrix.min()))
+        #            comm.mpi_comm.Barrier()
+        for paramname, param in sorted(invs_chain.namedparams()):
+            for rank in range(comm.size):
+                if comm.rank == rank:
+                    print('RANK: {}, PARAMNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, paramname, param.grad..mean(), param.grad.max(), param.grad.min()))
+                comm.mpi_comm.Barrier()
 
     def bcast_inv(self, invs):
         comm = self.comm.gcomm_g
         init_comms = getattr(comm, '_init_comms')
         init_comms()
         invs_chain = DummyChain(invs)
+        for linkname, matrices in sorted(invs.items()):
+            for matrix in matrices:
+                for rank in range(comm.size):
+                    if comm.rank == rank:
+                        print('RANK: {}, LINKNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, linkname, matrix.mean(), matrix.max(), matrix.min()))
+                    comm.mpi_comm.Barrier()
         comm.broadcast_data(invs_chain)
+        for linkname, matrices in sorted(invs.items()):
+            for matrix in matrices:
+                for rank in range(comm.size):
+                    if comm.rank == rank:
+                        print('RANK: {}, LINKNAME: {}, MEAN: {}, MAX: {}, MIN: {}'.format(self.comm.wcomm.rank, linkname, matrix.mean(), matrix.max(), matrix.min()))
+                    comm.mpi_comm.Barrier()
 
     def allreduce_cov(self, covs):
         comm = self.comm.ccomm

@@ -8,7 +8,9 @@ import chainermn
 import multiprocessing
 import cupy as cp
 import numpy as np
+import time
 import sys
+import statistics
 
 import dlframeworks
 
@@ -132,7 +134,7 @@ def main():
     )
     # damping ~ 0.035 is good
     optimizer.setup(model)
-
+    optimizer.add_hook(chainer.optimizer.WeightDecay(0.00022))
 
     if comm.is_grad_worker or comm.is_cov_worker:
         if comm.is_grad_worker:
@@ -239,9 +241,10 @@ def main():
         if args.resume:
             chainer.serializers.load_npz(args.resume, trainer)
 
+        s_time = time.time()
         trainer.run()
+        train_time = time.time() - s_time
         print('done', comm.wcomm.rank)
-
     else:
         # Inverse worker
         # ======== Create optimizer ========
@@ -250,6 +253,14 @@ def main():
             if optimizer.is_done:
                 break
         print('Inverse done')
+
+
+    for i in range(comm.wcomm.size):
+        if i == comm.wcomm.rank:
+            print('Training time: {}'.format(train_time))
+            for k, v in comm.times.items():
+                mean = statistics(mean) if len(v) > 0 else None
+                print(k, mean)
 
 
 if __name__ == '__main__':
