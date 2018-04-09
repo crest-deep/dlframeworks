@@ -123,6 +123,7 @@ mpirun \\
     --npergroup {npergroup} \\
     --comm-core {comm_core} \\
     --nclasses {nclasses} \\
+    --weight_decay {weight_decay} \\
 """.format(**options)
     if options['join_cov'] is not None:
         shell_script += '    --join-cov \\\n'.format(**options)

@@ -1,4 +1,5 @@
 import matplotlib.animation
+import matplotlib.pyplot as plt
 import numpy
 
 
@@ -10,6 +11,30 @@ def plot_log(data, x, y, ax, **kwargs):
             x_.append(i[x])
             y_.append(i[y])
     return ax.plot(x_, y_, **kwargs)
+
+
+class Plotter(object):
+    def __init__(self, out='tmp.pdf', loc=111):
+        self._loc = loc
+        self._out = out
+        self._fig = None
+        self._ax = None
+
+    def __enter__(self):
+        self._fig = plt.figure()
+        self._ax = self._fig.add_subplot(self._loc)
+        return self._fig, self._ax
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        if exc_type:
+            self._loc = None
+            self._out = None
+            self._fig = None
+            self._ax = None
+            return False
+        self._fig.savefig(self._out)
+        plt.close(self._fig)
+        return True
 
 
 def hist(array, fig, ax, **kwargs):

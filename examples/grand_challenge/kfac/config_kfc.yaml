@@ -26,6 +26,7 @@ n_inv_workers: 1
 join_cov: true
 npergroup: 2
 comm_core: gpu
+weight_decay: 0.0001
 
 nclasses: 8
 mean: mean.npy

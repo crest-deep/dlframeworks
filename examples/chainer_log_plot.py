@@ -3,28 +3,25 @@ import argparse
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot
 
-import dlframeworks.chainer
-import dlframeworks.chainer.utils
+from dlframeworks.chainer import Plotter
+from dlframeworks.chainer import plot_log
+from dlframeworks.chainer.utils import load_log
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--log', default='log')
-    parser.add_argument('--out', default='chainer_log_plot.pdf')
+    parser.add_argument('--out', default='tmp.pdf')
     args = parser.parse_args()
 
     x = 'epoch'
-    y = 'validation/main/loss'
+    y = 'validation/main/accuracy'
 
-    fig = matplotlib.pyplot.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    json_log = dlframeworks.chainer.utils.load_log(args.log)
-    dlframeworks.chainer.plot_log(json_log, x, y, ax)
-    ax.set_xlabel(x)
-    ax.set_ylabel(y)
-    ax.set_title('Example Plot')
-    fig.savefig(args.out)
-    matplotlib.pyplot.close(fig)
+    with Plotter(args.out) as (fig, ax):
+        plot_log(load_log(args.log), x, y, ax)
+        ax.set_xlabel(x)
+        ax.set_ylabel(y)
+        ax.set_title('Example plot')
 
 
 if __name__ == '__main__':
