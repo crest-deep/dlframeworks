@@ -366,7 +366,7 @@ Inv workers:  {}
     def sendrecv_param(self, optimizer):
         """Send or recieve parameters
 
-        Sender is gradient master and reciever is covariance worker.
+        Gradient master sends current paramter to all covariance workers.
 
         Args:
             optimizer (chainer.Optimizer): KFAC optimizer.
