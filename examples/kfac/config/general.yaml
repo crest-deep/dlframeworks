@@ -1,0 +1,23 @@
+nodetype:      f_node
+nnodes:        2
+walltime:      00:05:00
+jobname:       imagenet
+envs_file:     ./envs.sh
+ignored_files:
+  - "README.md"
+  - ".gitignore"
+  - "__pycache__"
+  - "parse_ops.py"
+  - "parse_ops_core.py"
+
+mean:         ./mean.npy
+arch:         resnet50
+communicator: hierarchical
+loadtype:     io
+iterator:     thread
+epoch:        5
+batchsize:    32
+loaderjob:    8
+resume:       null
+initmodel:    null
+test:         null

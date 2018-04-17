@@ -1,0 +1,10 @@
+#!/bin/bash
+set -eu
+
+if [[ "$(hostname)" = *kfc* ]]; then
+  script=$(python3 parse_ops.py -c config/general.yaml config/hyperparams.yaml config/kfc.yaml)
+  sbatch ${script}
+else
+  script=$(python3 parse_ops.py -c config/general.yaml config/hyperparams.yaml config/t3.yaml config/t3_gdr.yaml)
+  qsub -g tgc-ebdcrest ${script}
+fi

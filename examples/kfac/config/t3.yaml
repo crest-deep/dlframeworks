@@ -1,0 +1,17 @@
+out:        /gs/hs0/tgb-crest-deep/17M30275/results/tgc
+train:      /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/train008.txt
+train_root: /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/train
+val:        /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/val008.txt
+val_root:   /gs/hs0/tgb-crest-deep/data/images/ilsvrc12/val
+
+mpirun_ops:
+  - "-mca pml ob1"
+  - "-x PATH"
+  - "-x LIBRARY_PATH"
+  - "-x LD_LIBRARY_PATH"
+  - "-x CUDA_HOME"
+  - "-x CUDA_PATH"
+  - "-x CUDA_TOP"
+  - "-x CUDA_CACHE_DISABLE=1"
+  - "-x NCCL_IB_CUDA_SUPPORT"
+  - "-x NCCL_IB_SL"

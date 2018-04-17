@@ -1,0 +1,14 @@
+out:        "${HOME}/results/dlframeworks"
+train:      /home/share/ILSVRC2012/labels/train008.txt
+train_root: /home/share/ILSVRC2012/ILSVRC2012_img_train
+val:        /home/share/ILSVRC2012/labels/val008.txt
+val_root:   /home/share/ILSVRC2012/ILSVRC2012_img_val
+
+mpirun_ops:
+  - "-x PATH"
+  - "-x LIBRARY_PATH"
+  - "-x LD_LIBRARY_PATH"
+  - "-x CUDA_HOME"
+  - "-x CUDA_PATH"
+  - "-x CUDA_TOP"
+  - "-x CUDA_CACHE_DISABLE=1"

@@ -1,0 +1,11 @@
+lr:              0.001
+momentum:        0.9
+cov_ema_decay:   0.99
+inv_freq:        4
+damping:         0.005
+cov_batchsize:   16
+n_cov_workers:   1
+n_inv_workers:   1
+weight_decay:    0.0001
+join_cov:        true
+npergroup:       2
