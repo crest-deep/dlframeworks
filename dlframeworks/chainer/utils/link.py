@@ -1,0 +1,18 @@
+def get_linknames(model):
+    linknames = set()
+    for paramname, _ in model.namedparams():
+        linkname = paramname[:paramname.rfind('/')]
+        linknames.add(linkname)
+    return list(linknames)
+
+
+def get_link(model, name):
+    for linkname, link in model.namedlinks():
+        if linkname == name:
+            return link
+
+
+def get_param(model, name):
+    for paramname, param in model.namedparams():
+        if paramname == name:
+            return param
