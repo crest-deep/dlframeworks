@@ -15,7 +15,7 @@ class FlatCommunicator(kfac_communicator_base.KFACCommunicatorBase):
         super(FlatCommunicator, self).__init__(
             mpi_comm, False, dynamic, debug)
 
-        # GPU buffers, memory allocation will be done after
+        # GPU buffers
         self.gpu_buffer_a = DeviceMemory()
         self.gpu_buffer_b = DeviceMemory()
 
@@ -27,6 +27,17 @@ class FlatCommunicator(kfac_communicator_base.KFACCommunicatorBase):
 
     def reduce_scatterv(self, model, covs, root=0):
         """Reduce and Scatterv grads and covs
+
+        1. Extract (by reference)
+            model, covs -> dictionary
+        2. Pack
+            dictionary -> GPU buffer A
+        3. Reduce
+            GPU buffer A -> GPU buffer B
+        4. Scatterv
+            GPU buffer B -> GPU buffer A
+        5. Unpack
+            GPU buffer A -> dictionary
 
         """
         self.setup(model)
@@ -82,6 +93,13 @@ class FlatCommunicator(kfac_communicator_base.KFACCommunicatorBase):
 
     def allgatherv(self, model):
         """Allgatherv kfgrads
+
+        1. Pack
+            kfgrads -> GPU buffer A
+        2. Allgatherv
+            GPU buffer A -> GPU buffer B
+        3. Unpack
+            GPU buffer B -> kfgrads
 
         """
         cuda_stream = chainer.cuda.Stream.null
