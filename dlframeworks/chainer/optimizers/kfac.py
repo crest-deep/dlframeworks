@@ -1,16 +1,11 @@
 import collections
 import heapq
-import time
 import numpy
 
 import chainer
 from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
-
-import chainer.cuda
-
-import pickle
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.001
@@ -37,7 +32,7 @@ def _cov_linear(xp, acts, grads, nobias):
         acts = xp.column_stack((acts, ones))
     A = acts.T.dot(acts) / n
     G = grads.T.dot(grads) / n
-    return [A, G], [cuda.to_cpu(acts), cuda.to_cpu(grads)]
+    return [A, G]
 
 
 def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
@@ -53,7 +48,7 @@ def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
     grads = grads.transpose(0, 2, 3, 1)
     grads = grads.reshape(n*ho*wo, -1)
     G = grads.T.dot(grads) / (n*ho*wo)
-    return [A, G], [cuda.to_cpu(acts_expand), cuda.to_cpu(grads)]
+    return [A, G]
 
 
 def _acts_expand_convolution_2d(acts, ksize, stride, pad):
@@ -65,44 +60,6 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     # n*ho*wo x c*ksize*ksize
     acts_expand = acts_expand.reshape(n*ho*wo, -1)
     return acts_expand
-
-
-def _rank1_approximation(xp, arr):
-    m, n = arr.shape
-    if m < n: arr = arr.T
-    U, D, V = _rsvd(xp, arr, k=1, p=10)
-    s = D[0][0]
-    u1 = xp.sqrt(s) * U.reshape(-1)
-    v1 = xp.sqrt(s) * V[0][:]
-    if m < n: 
-        return v1.T, u1.T
-    else:
-        return u1, v1
-    
-
-def _rsvd(xp, arr, k, p):
-    """
-    Compute the randomized SVD
-    Arguments
-    ---------
-    arr - np.array
-    k - int
-        Target rank
-    p - int
-        Oversampling
-    """
-    m, n = arr.shape
-    assert m >= n
-    G = xp.random.randn(n, k+p)
-    Y = arr @ G
-    Q, R = xp.linalg.qr(Y)
-    B = Q.transpose() @ arr
-    Uhat, s, V = xp.linalg.svd(B)
-    # Create truncated output matrices
-    U = (Q @ Uhat)[:, :k]
-    D = xp.diag(s[:k])
-    V = V[:k, :]
-    return U, D, V
 
 
 def _kfac_backward(loss, chain):
@@ -416,8 +373,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
             for i, linkname in enumerate(sorted(self.rank_dict.keys())):
                 self.cov_ema_update_core(linkname)
-            with open('acts_grads.pickle', 'wb') as f:
-                pickle.dump(self.acts_grads_dict, f, protocol=pickle.HIGHEST_PROTOCOL)     
 
             # ======== Communication
             if comm is not None:
@@ -433,10 +388,10 @@ class KFAC(chainer.optimizer.GradientMethod):
         xp = cuda.get_array_module(acts, grads)
         with cuda.get_device_from_array(acts, grads):
             if acts.ndim == 2:  # linear
-                covs, acts_grads = _cov_linear(xp, acts, grads, nobias)
+                covs = _cov_linear(xp, acts, grads, nobias)
             elif acts.ndim == 4:  # convolution_2d
                 ksize, stride, pad = self.conv_args_dict[linkname]
-                covs, acts_grads = _cov_convolution_2d(
+                covs = _cov_convolution_2d(
                         xp, acts, grads, nobias, ksize, stride, pad)
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
@@ -452,7 +407,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             self.cov_ema_dict[linkname] = cov_emas
         else:
             self.cov_ema_dict[linkname] = covs
-        self.acts_grads_dict[linkname] = acts_grads
 
     def inv_update(self):
         comm = self.communicator
