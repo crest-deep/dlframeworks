@@ -62,22 +62,18 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     return acts_expand
 
 
-def _kfac_backward(loss, chain):
-    if loss.creator_node is None:
-        return
+def _kfac_backward(link, backward_main):
+    """Backward function for KFAC optimizer.
+    This function is invoked from ``KFAC.update()`` to:
+        1. calculate backprop
+        2. obtain a (activations)
+        3. obtain g (gradients of activation's input).
+    """
+    with chainer.using_config('enable_backprop', False):
+        # To obtain grads, we need to edit a file ``variable.py``
+        grads = backward_main(retain_grad=True, loss_scale=None)
 
-    namedparams = list(chain.namedparams())
-
-    acts_dict = {}
-    grads_dict = {}
-    rank_dict = {}
-    conv_args_dict = {}
-
-    output_vars = []
-    linknames = []
-
-    cand_funcs = []
-    seen_set = set()
+    namedparams = list(link.namedparams())
 
     def get_linkname(param):
         # Get a linkname from a parameter.
@@ -87,44 +83,27 @@ def _kfac_backward(loss, chain):
                 return _name[:_name.rfind('/')]
         return None
 
-    def add_cand(cand):
-        if cand not in seen_set:
-            heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
-            seen_set.add(cand)
-
-    add_cand(loss.creator_node)
-
-    while cand_funcs:
-        _, _, func_node = heapq.heappop(cand_funcs)
-        if isinstance(func_node, _linear_function) \
-          or isinstance(func_node, _convolution_2d_function):
-            (acts_var, param) = func_node.get_retained_inputs()
-            linkname = get_linkname(param)
-            assert linkname is not None, 'linkname cannot be None.'
-            acts_dict[linkname] = acts_var.data
-            rank_dict[linkname] = func_node.rank
-            linknames.append(linkname)
-
-            (preacts_var,) = func_node.get_retained_outputs()
-            output_vars.append(preacts_var)
-
-            if isinstance(func_node, _convolution_2d_function):
-                conv = func_node
-                stride, pad = conv.sy, conv.ph
-                _, _, ksize, _ = param.data.shape
-                conv_args_dict[linkname] = ksize, stride, pad
-
-        for x in func_node.inputs:
-            if x.creator_node is not None:
-                add_cand(x.creator_node)
-
-    # backprop
-    grads_vars = chainer.grad([loss], output_vars)
-
-    for i, linkname in enumerate(linknames):
-        grads_dict[linkname] = grads_vars[i].data
-
-    return acts_dict, grads_dict, rank_dict, conv_args_dict
+    acts_dict = {}
+    grads_dict = {}
+    ranks_dict = {}
+    conv_args_dict = {}
+    for node, grads in grads.items():
+        creator_node = node.creator_node  # parent function node
+        if creator_node is not None:  # ignore leaf node
+            if isinstance(creator_node, _linear_function) \
+              or isinstance(creator_node, _convolution_2d_function):
+                (acts, param) = creator_node.get_retained_inputs()
+                linkname = get_linkname(param)
+                assert linkname is not None, 'linkname cannot be None.' 
+                acts_dict[linkname] = acts.data  # numpy or cupy
+                grads_dict[linkname] = grads.data  # numpy or cupy
+                ranks_dict[linkname] = creator_node.rank
+                if isinstance(creator_node, _convolution_2d_function):
+                  conv = creator_node
+                  stride, pad  = conv.sy, conv.ph
+                  _, _, ksize, _ = param.data.shape
+                  conv_args_dict[linkname] = ksize, stride, pad
+    return acts_dict, grads_dict, ranks_dict, conv_args_dict
 
 
 def _kfac_grad_update(xp, param_W, param_b, invs):
@@ -277,7 +256,14 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.target.cleargrads()
             else:
                 self.target.zerograds()
-            loss.backward()
+
+            # We will remove ``loss.backward()`` from here.
+            # Do backprop, and obtain ``grads`` which contains the dependency
+            # graph inside.
+            backward_main = getattr(loss, '_backward_main')
+
+            self.acts_dict, self.grads_dict, self.ranks_dict, self.conv_args_dict = \
+                _kfac_backward(self.target, backward_main)
             del loss  # No more backward computation, free memory
 
             # ======== Communication
@@ -366,11 +352,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             if is_done:
                 return True
         if lossfun is not None:
-            loss = lossfun(*args, **kwds)
-            self.acts_dict, self.grads_dict, self.rank_dict, \
-                self.conv_args_dict = _kfac_backward(loss, self.target)
-            del loss
-
             for i, linkname in enumerate(sorted(self.rank_dict.keys())):
                 self.cov_ema_update_core(linkname)
 
