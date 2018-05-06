@@ -1,5 +1,4 @@
 import collections
-import heapq
 import numpy
 
 import chainer
@@ -38,8 +37,7 @@ def _cov_linear(xp, acts, grads, nobias):
 def _cov_convolution_2d(xp, acts, grads, nobias, ksize, stride, pad):
     # Note that this method is called inside a with-statement of xp module
     n, _, _, _ = acts.shape
-    acts_expand = _acts_expand_convolution_2d( \
-                    acts, ksize, stride, pad) # n*ho*wo x c*ksize*ksize
+    acts_expand = _acts_expand_convolution_2d(acts, ksize, stride, pad)
     if not nobias:
         ones = xp.ones(acts_expand.shape[0])
         acts_expand = xp.column_stack((acts_expand, ones))
@@ -94,15 +92,15 @@ def _kfac_backward(link, backward_main):
               or isinstance(creator_node, _convolution_2d_function):
                 (acts, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
-                assert linkname is not None, 'linkname cannot be None.' 
+                assert linkname is not None, 'linkname cannot be None.'
                 acts_dict[linkname] = acts.data  # numpy or cupy
                 grads_dict[linkname] = grads.data  # numpy or cupy
                 ranks_dict[linkname] = creator_node.rank
                 if isinstance(creator_node, _convolution_2d_function):
-                  conv = creator_node
-                  stride, pad  = conv.sy, conv.ph
-                  _, _, ksize, _ = param.data.shape
-                  conv_args_dict[linkname] = ksize, stride, pad
+                    conv = creator_node
+                    stride, pad = conv.sy, conv.ph
+                    _, _, ksize, _ = param.data.shape
+                    conv_args_dict[linkname] = ksize, stride, pad
     return acts_dict, grads_dict, ranks_dict, conv_args_dict
 
 
@@ -135,12 +133,10 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
         if momentum is not None:
             self.hyperparam.momentum = momentum
 
-
     def init_state(self, param):
         xp = cuda.get_array_module(param.data)
         with cuda.get_device_from_array(param.data):
             self.state['v'] = xp.zeros_like(param.data)
-
 
     def update_core_cpu(self, param):
         grad = param.kfgrad if hasattr(param, 'kfgrad') else param.grad
@@ -161,7 +157,7 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
             '''v = momentum * v - lr * grad;
             param += v;''',
             'kfac')(grad, self.hyperparam.lr, self.hyperparam.momentum,
-                   param.data, self.state['v'])
+                    param.data, self.state['v'])
 
 
 class KFAC(chainer.optimizer.GradientMethod):
@@ -261,8 +257,10 @@ class KFAC(chainer.optimizer.GradientMethod):
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
 
-            self.acts_dict, self.grads_dict, self.ranks_dict, self.conv_args_dict = \
+            self.acts_dict, self.grads_dict, \
+                self.ranks_dict, self.conv_args_dict = \
                 _kfac_backward(self.target, backward_main)
+
             del loss  # No more backward computation, free memory
 
             # ======== Communication
@@ -410,8 +408,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             emas = self.cov_ema_dict[key]
             self.inv_update_core(linkname, emas)
 
-        #for linkname, emas in self.cov_ema_dict.items():
-        #    self.inv_update_core(linkname, emas)
         self.t_inv += 1
         # ======== Communication
         if comm is not None:
@@ -428,7 +424,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 dmp = xp.identity(ema.shape[0]) * \
                   xp.sqrt(self.hyperparam.damping)
                 return inv(ema + dmp)
-            
+
             def inv(X):
                 alg = self.inv_alg
                 if alg == 'cholesky':
@@ -437,7 +433,6 @@ class KFAC(chainer.optimizer.GradientMethod):
                 else:
                     return xp.linalg.inv(X)
 
-            assert len(emas) == 2, 'Length of emas has to be 2.' 
+            assert len(emas) == 2, 'Length of emas has to be 2.'
             invs = [inv_2factors(ema) for ema in emas]
             self.inv_dict[linkname] = invs
-
