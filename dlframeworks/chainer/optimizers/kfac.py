@@ -186,7 +186,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.target_params = []
         self.acts_dict = {}
         self.grads_dict = {}
-        self.acts_grads_dict = {}
         self.rank_dict = {}
         self.conv_args_dict = {}
         self.inv_alg = inv_alg
