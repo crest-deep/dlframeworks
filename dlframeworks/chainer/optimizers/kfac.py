@@ -125,6 +125,19 @@ def _kfac_grad_update(xp, param_W, param_b, invs):
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
+    """Update rule for K-FAC.
+
+    See :class:`~chainer.optimizers.K-FAC` for the default value of the
+    hyperparameters.
+
+    Args:
+        parent_hyperparam (~chainer.optimizer.Hyperparameter): Hyperparameter
+            that provides the default values.
+        lr (float): Learning rate.
+        momentum (float): Exponential decay rate of the first order moment.
+
+    """
+
     def __init__(self, parent_hyperparam=None, lr=None, momentum=None):
         super(KFACUpdateRule, self).__init__(
             parent_hyperparam or _default_hyperparam)
@@ -164,8 +177,8 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     """K-FAC optimizer.
 
-    See: `Optimizing Neural Networks \
-          with Kronecker-factored Approximate Curvature \
+    See: `Optimizing Neural Networks with \
+          Kronecker-factored Approximate Curvature \
           <https://arxiv.org/abs/1503.05671>`_
 
     Args:
@@ -173,12 +186,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         momentum (float): Exponential decay rate of the first order moment.
         cov_ema_decay (float): Decay factor used when calculating the \
                                covariance estimate Exponential Moving Average.
-        damping (float): Damping factor used to stabilize training \
-                         due to errors in the local approximation with the \
-                         Fisher information matrix.
         inv_freq (int): Frequency to calculate the inverse of covariance \
                         estimate EMA for each layer.
         inv_alg (string): Algorithm used when calculating the inverse.
+        damping (float): Damping factor used to stabilize training \
+                         due to errors in the local approximation with the \
+                         Fisher information matrix.
 
     """
 
