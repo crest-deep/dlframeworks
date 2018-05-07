@@ -60,25 +60,6 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     return acts_expand
 
 
-def _kfac_grad_update(xp, param_W, param_b, invs):
-    # Note that this method is called inside a with-statement of xp module
-    A_inv, G_inv = invs
-    grad = param_W.grad
-    if grad.ndim == 4:  # convolution_2d
-        c_o, c_i, h, w = grad.shape
-        grad = grad.reshape(c_o, -1)
-    if param_b is not None:
-        grad = xp.column_stack([grad, param_b.grad])
-
-    kfgrads = xp.dot(xp.dot(G_inv, grad), A_inv).astype(grad.dtype)
-
-    if param_b is not None:
-        param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
-        param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
-    else:
-        param_W.kfgrad = kfgrads.reshape(param_W.grad.shape)
-
-
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
     """Update rule for K-FAC.
@@ -268,17 +249,8 @@ class KFAC(chainer.optimizer.GradientMethod):
                     comm.bcast_inv(self.inv_dict)
                     self.t_inv += 1
 
-            for linkname, invs in self.inv_dict.items():
-                param_W = self.get_param(linkname + '/W')
-                param_b = self.get_param(linkname + '/b')
-                # Some links has empty b param
-                assert param_W is not None
-                data = (param_W.data, param_b.data, invs) \
-                    if param_b is not None else (param_W.data, invs)
-
-                xp = cuda.get_array_module(*data)
-                with cuda.get_device_from_array(*data):
-                    _kfac_grad_update(xp, param_W, param_b, invs)
+            # Update param.kfgrad for each layer 
+            self.kfac_grad_update()
 
         self.reallocate_cleared_grads()
         self.call_hooks('pre')
@@ -331,6 +303,35 @@ class KFAC(chainer.optimizer.GradientMethod):
                         stride, pad = conv.sy, conv.ph
                         _, _, ksize, _ = param.data.shape
                         self.conv_args_dict[linkname] = ksize, stride, pad
+
+    def kfac_grad_update(self):
+        for linkname, invs in self.inv_dict.items():
+            self._kfac_grad_update_core(linkname, invs)
+
+    def _kfac_grad_update_core(self, linkname, invs):
+        param_W = self.get_param(linkname + '/W')
+        param_b = self.get_param(linkname + '/b')
+        # Some links has empty b param
+        assert param_W is not None
+        data = (param_W.data, param_b.data, invs) \
+            if param_b is not None else (param_W.data, invs)
+        xp = cuda.get_array_module(*data)
+        with cuda.get_device_from_array(*data):
+            A_inv, G_inv = invs
+            grad = param_W.grad
+            if grad.ndim == 4:  # convolution_2d
+                c_o, c_i, h, w = grad.shape
+                grad = grad.reshape(c_o, -1)
+            if param_b is not None:
+                grad = xp.column_stack([grad, param_b.grad])
+
+            kfgrads = xp.dot(xp.dot(G_inv, grad), A_inv).astype(grad.dtype)
+
+            if param_b is not None:
+                param_W.kfgrad = kfgrads[:, :-1].reshape(param_W.grad.shape)
+                param_b.kfgrad = kfgrads[:, -1].reshape(param_b.grad.shape)
+            else:
+                param_W.kfgrad = kfgrads.reshape(param_W.grad.shape)
 
     def get_param(self, path):
         for _name, _param in self.target.namedparams():
@@ -386,7 +387,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return True
         if lossfun is not None:
             for i, linkname in enumerate(sorted(self.rank_dict.keys())):
-                self.cov_ema_update_core(linkname)
+                self._cov_ema_update_core(linkname)
 
             # ======== Communication
             if comm is not None:
@@ -394,7 +395,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                 self.t_inv += 1
             self.t_cov += 1
 
-    def cov_ema_update_core(self, linkname):
+    def _cov_ema_update_core(self, linkname):
         comm = self.communicator
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
@@ -442,7 +443,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         for key in my_keys:
             linkname = key
             emas = self.cov_ema_dict[key]
-            self.inv_update_core(linkname, emas)
+            self._inv_update_core(linkname, emas)
 
         self.t_inv += 1
         # ======== Communication
@@ -451,7 +452,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             if is_done:
                 return True
 
-    def inv_update_core(self, linkname, emas):
+    def _inv_update_core(self, linkname, emas):
         xp = cuda.get_array_module(*emas)
         with cuda.get_device_from_array(*emas):
 
