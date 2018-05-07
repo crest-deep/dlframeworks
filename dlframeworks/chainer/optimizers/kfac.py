@@ -140,20 +140,23 @@ class KFAC(chainer.optimizer.GradientMethod):
     Args:
         lr (float): Learning rate.
         momentum (float): Exponential decay rate of the first order moment.
-        cov_ema_decay (float): Decay factor used when calculating the \
+        cov_ema_decay (float): Decay factor used when calculating the
                                covariance estimate Exponential Moving Average.
-        inv_freq (int): Frequency to calculate the inverse of covariance \
+        inv_freq (int): Frequency to calculate the inverse of covariance
                         estimate EMA for each layer.
         inv_alg (str): Algorithm used when calculating the inverse.
-        damping (float): Damping factor used to stabilize training \
-                         due to errors in the local approximation with the \
+        damping (float): Damping factor used to stabilize training
+                         due to errors in the local approximation with the
                          Fisher information matrix.
 
     Attributes:
-        acts_dict (dict):
-        grads_dict (dict):
-        rank_dict (dict):
-        conv_args_dict (dict):
+        acts_dict (dict): Keep inputs (activations after previous layer)
+                          for each layer.
+        grads_dict (dict): Keep gradients of outputs for each layer.
+        rank_dict (dict): Keep `~chainer.FunctionNode.rank` for each layer.
+        conv_args_dict (dict): Keep arguments for each convolutional layer
+                               (`~chainer.links.connection.\
+                                 convolution_2d.Convolution2D`).
 
     """
 
@@ -174,7 +177,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
-        self.target_params = []
         self.acts_dict = {}
         self.grads_dict = {}
         self.rank_dict = {}
@@ -247,11 +249,10 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 self.target.zerograds()
 
-            # We will remove ``loss.backward()`` from here.
+            # We removed ``loss.backward()`` from here.
             # Do backprop, and obtain ``grads`` which contains the dependency
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
-
             self._kfac_backward(self.target, backward_main)
 
             del loss  # No more backward computation, free memory
@@ -293,9 +294,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         """Backward function for KFAC optimizer.
         This function is invoked from ``KFAC.update()`` to:
             1. calculate backprop
-            2. obtain the following data for each layer (`chainer.link.Link`)
+            2. obtain the following data for each layer (`~chainer.link.Link`)
                 - acts (inputs = activations after previous layer)
-                - grads (gradients of outputs).
+                - grads (gradients of outputs)
+                - rank (`~chainer.FunctionNode.rank`)
+                - conv_args (arguments of `~chainer.links.connection.\
+                                           convolution_2d.Convolution2D`)
         """
         with chainer.using_config('enable_backprop', False):
             # To obtain grads, we need to edit a file ``variable.py``
