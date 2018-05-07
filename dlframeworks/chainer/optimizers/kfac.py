@@ -198,7 +198,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         if comm is None:
             self.grad_update(lossfun, *args, **kwds)
-            self.cov_ema_update(lossfun)
+            self.cov_ema_update()
             if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
                 self.inv_update()
         else:
@@ -209,7 +209,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             if comm.is_cov_worker:
                 if comm.ccomm.rank == 0:
                     print('cov_ema_update()')
-                self.is_done = self.cov_ema_update(lossfun)
+                self.is_done = self.cov_ema_update()
             if comm.is_inv_worker:
                 if comm.icomm_g.rank == 0:
                     print('inv_update()')
@@ -249,7 +249,7 @@ class KFAC(chainer.optimizer.GradientMethod):
                     comm.bcast_inv(self.inv_dict)
                     self.t_inv += 1
 
-            # Update param.kfgrad for each layer 
+            # Update param.kfgrad for each layer
             self.kfac_grad_update()
 
         self.reallocate_cleared_grads()
@@ -264,7 +264,7 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def _kfac_backward(self, link, backward_main):
         """Backward function for KFAC optimizer.
-        This function is invoked from ``KFAC.update()`` to:
+        This function is invoked from ``KFAC.grad_update()`` to:
             1. calculate backprop
             2. obtain the following data for each layer (`~chainer.link.Link`)
                 - acts (inputs = activations after previous layer)
@@ -305,10 +305,20 @@ class KFAC(chainer.optimizer.GradientMethod):
                         self.conv_args_dict[linkname] = ksize, stride, pad
 
     def kfac_grad_update(self):
+        """Update param.kfgrad which used for K-FAC updates for each laeyer.
+
+        This function refers `self.inv_dict`.
+        """
         for linkname, invs in self.inv_dict.items():
             self._kfac_grad_update_core(linkname, invs)
 
     def _kfac_grad_update_core(self, linkname, invs):
+        """Update the value of `~chainer.Parameter.kfgrad`.
+
+        Args:
+            linkname (str): Name of link.
+            invs (touple): Pair of inverse (A_inv, G_inv).
+        """
         param_W = self.get_param(linkname + '/W')
         param_b = self.get_param(linkname + '/b')
         # Some links has empty b param
@@ -376,7 +386,11 @@ class KFAC(chainer.optimizer.GradientMethod):
         return collections.OrderedDict(
             sorted(dictionary.items(), key=lambda x: x[0]))
 
-    def cov_ema_update(self, lossfun=None):
+    def cov_ema_update(self):
+        """Update EMA of covariance for each laeyer.
+
+        This function refers `self.rank_dict` to get sorted keys (linknames).
+        """
         comm = self.communicator
         if self.t_cov == 0:
             self.cov_ema_dict = self.allocate_matrices()
@@ -385,17 +399,21 @@ class KFAC(chainer.optimizer.GradientMethod):
             is_done = comm.sendrecv_param(self)
             if is_done:
                 return True
-        if lossfun is not None:
-            for i, linkname in enumerate(sorted(self.rank_dict.keys())):
-                self._cov_ema_update_core(linkname)
+        for i, linkname in enumerate(sorted(self.rank_dict.keys())):
+            self._cov_ema_update_core(linkname)
 
-            # ======== Communication
-            if comm is not None:
-                comm.sendrecv_cov_ema(self.cov_ema_dict)
-                self.t_inv += 1
-            self.t_cov += 1
+        # ======== Communication
+        if comm is not None:
+            comm.sendrecv_cov_ema(self.cov_ema_dict)
+            self.t_inv += 1
+        self.t_cov += 1
 
     def _cov_ema_update_core(self, linkname):
+        """Update the value of `self.cov_ema_dict[linkname]`.
+
+        Args:
+            linkname (str): Key of `self.cov_ema_dict`.
+        """
         comm = self.communicator
         acts = self.acts_dict[linkname]
         grads = self.grads_dict[linkname]
@@ -424,6 +442,10 @@ class KFAC(chainer.optimizer.GradientMethod):
             self.cov_ema_dict[linkname] = covs
 
     def inv_update(self):
+        """Update inverse of EMA of covariance for each laeyer.
+
+        This function refers `self.cov_ema_dict`.
+        """
         comm = self.communicator
         # ======== Communication
         if comm is not None:
@@ -453,6 +475,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return True
 
     def _inv_update_core(self, linkname, emas):
+        """Update the value of `self.inv_dict[linkname]`.
+
+        Args:
+            linkname (str): Key of `self.inv_dict`.
+            emas (touple): Pair of EMA of covariance (A_ema, G_ema).
+        """
         xp = cuda.get_array_module(*emas)
         with cuda.get_device_from_array(*emas):
 
@@ -471,3 +499,5 @@ class KFAC(chainer.optimizer.GradientMethod):
                     return xp.linalg.inv(X)
 
             assert len(emas) == 2, 'Length of emas has to be 2.'
+            invs = [inv_2factors(ema) for ema in emas]
+            self.inv_dict[linkname] = invs
