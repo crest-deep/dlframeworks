@@ -162,6 +162,26 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
 class KFAC(chainer.optimizer.GradientMethod):
 
+    """K-FAC optimizer.
+
+    See: `Optimizing Neural Networks \
+          with Kronecker-factored Approximate Curvature \
+          <https://arxiv.org/abs/1503.05671>`_
+
+    Args:
+        lr (float): Learning rate.
+        momentum (float): Exponential decay rate of the first order moment.
+        cov_ema_decay (float): Decay factor used when calculating the \
+                               covariance estimate Exponential Moving Average.
+        damping (float): Damping factor used to stabilize training \
+                         due to errors in the local approximation with the \
+                         Fisher information matrix.
+        inv_freq (int): Frequency to calculate the inverse of covariance \
+                        estimate EMA for each layer.
+        inv_alg (string): Algorithm used when calculating the inverse.
+
+    """
+
     def __init__(self,
                  communicator=None,
                  inv_server=None,
@@ -220,7 +240,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         if comm is None:
             self.grad_update(lossfun, *args, **kwds)
-            self.cov_ema_update(lossfun, *args, **kwds)
+            self.cov_ema_update(lossfun)
             if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
                 self.inv_update()
         else:
@@ -231,7 +251,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             if comm.is_cov_worker:
                 if comm.ccomm.rank == 0:
                     print('cov_ema_update()')
-                self.is_done = self.cov_ema_update(lossfun, *args, **kwds)
+                self.is_done = self.cov_ema_update(lossfun)
             if comm.is_inv_worker:
                 if comm.icomm_g.rank == 0:
                     print('inv_update()')
@@ -339,7 +359,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         return collections.OrderedDict(
             sorted(dictionary.items(), key=lambda x: x[0]))
 
-    def cov_ema_update(self, lossfun=None, *args, **kwds):
+    def cov_ema_update(self, lossfun=None):
         comm = self.communicator
         if self.t_cov == 0:
             self.cov_ema_dict = self.allocate_matrices()
@@ -434,5 +454,3 @@ class KFAC(chainer.optimizer.GradientMethod):
                     return xp.linalg.inv(X)
 
             assert len(emas) == 2, 'Length of emas has to be 2.'
-            invs = [inv_2factors(ema) for ema in emas]
-            self.inv_dict[linkname] = invs
