@@ -60,50 +60,6 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     return acts_expand
 
 
-def _kfac_backward(link, backward_main):
-    """Backward function for KFAC optimizer.
-    This function is invoked from ``KFAC.update()`` to:
-        1. calculate backprop
-        2. obtain a (activations)
-        3. obtain g (gradients of activation's input).
-    """
-    with chainer.using_config('enable_backprop', False):
-        # To obtain grads, we need to edit a file ``variable.py``
-        grads = backward_main(retain_grad=True, loss_scale=None)
-
-    namedparams = list(link.namedparams())
-
-    def get_linkname(param):
-        # Get a linkname from a parameter.
-        for _name, _param in namedparams:
-            if param is _param:
-                # Only return linkname NOT paramname.
-                return _name[:_name.rfind('/')]
-        return None
-
-    acts_dict = {}
-    grads_dict = {}
-    ranks_dict = {}
-    conv_args_dict = {}
-    for node, grads in grads.items():
-        creator_node = node.creator_node  # parent function node
-        if creator_node is not None:  # ignore leaf node
-            if isinstance(creator_node, _linear_function) \
-              or isinstance(creator_node, _convolution_2d_function):
-                (acts, param) = creator_node.get_retained_inputs()
-                linkname = get_linkname(param)
-                assert linkname is not None, 'linkname cannot be None.'
-                acts_dict[linkname] = acts.data  # numpy or cupy
-                grads_dict[linkname] = grads.data  # numpy or cupy
-                ranks_dict[linkname] = creator_node.rank
-                if isinstance(creator_node, _convolution_2d_function):
-                    conv = creator_node
-                    stride, pad = conv.sy, conv.ph
-                    _, _, ksize, _ = param.data.shape
-                    conv_args_dict[linkname] = ksize, stride, pad
-    return acts_dict, grads_dict, ranks_dict, conv_args_dict
-
-
 def _kfac_grad_update(xp, param_W, param_b, invs):
     # Note that this method is called inside a with-statement of xp module
     A_inv, G_inv = invs
@@ -127,7 +83,7 @@ class KFACUpdateRule(chainer.optimizer.UpdateRule):
 
     """Update rule for K-FAC.
 
-    See :class:`~chainer.optimizers.K-FAC` for the default value of the
+    See :class:`~chainer.optimizers.KFAC` for the default value of the
     hyperparameters.
 
     Args:
@@ -188,10 +144,16 @@ class KFAC(chainer.optimizer.GradientMethod):
                                covariance estimate Exponential Moving Average.
         inv_freq (int): Frequency to calculate the inverse of covariance \
                         estimate EMA for each layer.
-        inv_alg (string): Algorithm used when calculating the inverse.
+        inv_alg (str): Algorithm used when calculating the inverse.
         damping (float): Damping factor used to stabilize training \
                          due to errors in the local approximation with the \
                          Fisher information matrix.
+
+    Attributes:
+        acts_dict (dict):
+        grads_dict (dict):
+        rank_dict (dict):
+        conv_args_dict (dict):
 
     """
 
@@ -290,9 +252,7 @@ class KFAC(chainer.optimizer.GradientMethod):
             # graph inside.
             backward_main = getattr(loss, '_backward_main')
 
-            self.acts_dict, self.grads_dict, \
-                self.ranks_dict, self.conv_args_dict = \
-                _kfac_backward(self.target, backward_main)
+            self._kfac_backward(self.target, backward_main)
 
             del loss  # No more backward computation, free memory
 
@@ -328,6 +288,45 @@ class KFAC(chainer.optimizer.GradientMethod):
 
         self.reallocate_cleared_grads()
         self.call_hooks('post')
+
+    def _kfac_backward(self, link, backward_main):
+        """Backward function for KFAC optimizer.
+        This function is invoked from ``KFAC.update()`` to:
+            1. calculate backprop
+            2. obtain the following data for each layer (`chainer.link.Link`)
+                - acts (inputs = activations after previous layer)
+                - grads (gradients of outputs).
+        """
+        with chainer.using_config('enable_backprop', False):
+            # To obtain grads, we need to edit a file ``variable.py``
+            grads = backward_main(retain_grad=True, loss_scale=None)
+
+        namedparams = list(link.namedparams())
+
+        def get_linkname(param):
+            # Get a linkname from a parameter.
+            for _name, _param in namedparams:
+                if param is _param:
+                    # Only return linkname NOT paramname.
+                    return _name[:_name.rfind('/')]
+            return None
+
+        for node, grads in grads.items():
+            creator_node = node.creator_node  # parent function node
+            if creator_node is not None:  # ignore leaf node
+                if isinstance(creator_node, _linear_function) \
+                  or isinstance(creator_node, _convolution_2d_function):
+                    (acts, param) = creator_node.get_retained_inputs()
+                    linkname = get_linkname(param)
+                    assert linkname is not None, 'linkname cannot be None.'
+                    self.acts_dict[linkname] = acts.data  # numpy or cupy
+                    self.grads_dict[linkname] = grads.data  # numpy or cupy
+                    self.rank_dict[linkname] = creator_node.rank
+                    if isinstance(creator_node, _convolution_2d_function):
+                        conv = creator_node
+                        stride, pad = conv.sy, conv.ph
+                        _, _, ksize, _ = param.data.shape
+                        self.conv_args_dict[linkname] = ksize, stride, pad
 
     def get_param(self, path):
         for _name, _param in self.target.namedparams():
