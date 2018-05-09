@@ -41,7 +41,7 @@ def allgatherv_pack(model, divided_linknames, gpu_buf, sizeof_dtype, rank):
         for linkname in sorted(linknames):
             link = get_link(model, linkname)
             for paramname, param in sorted(link.namedparams()):
-                if param.kfgrad is None:
+                if not hasattr(param, 'kfgrad'):
                     continue
                 sendcount += param.kfgrad.size
                 if i == rank:
@@ -59,7 +59,7 @@ def allgatherv_unpack(model, linknames, gpu_buf, sizeof_dtype):
     for linkname in linknames:
         link = get_link(model, linkname)
         for paramname, param in sorted(link.namedparams()):
-            if param.kfgrad is None:
+            if not hasattr(param, 'kfgrad'):
                 continue
             nbytes = param.kfgrad.size * sizeof_dtype
             gpu_buf.to_device(param.kfgrad, nbytes, buf_offset)

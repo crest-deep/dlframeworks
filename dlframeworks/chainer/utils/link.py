@@ -5,6 +5,9 @@ def get_linknames(model):
     linknames = set()
     for paramname, _ in model.namedparams():
         linkname = paramname[:paramname.rfind('/')]
+        # TODO(Yohei):
+        if 'bn' in linkname:
+            continue
         linknames.add(linkname)
     return list(linknames)
 

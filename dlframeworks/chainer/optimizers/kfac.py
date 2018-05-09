@@ -201,8 +201,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.cov_ema_update()
         if comm is not None:
             comm.reduce_scatterv(self.target, self.cov_ema_dict)
-        if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
-            self.inv_update()
+        self.inv_update()
         if comm is not None:
             comm.allgatherv(self.target)
 
@@ -368,18 +367,9 @@ class KFAC(chainer.optimizer.GradientMethod):
         comm = self.communicator
         if self.t_cov == 0:
             self.cov_ema_dict = self.allocate_matrices()
-        # ======== Communication
-        if comm is not None:
-            is_done = comm.sendrecv_param(self)
-            if is_done:
-                return True
         for i, linkname in enumerate(sorted(self.rank_dict.keys())):
             self._cov_ema_update_core(linkname)
 
-        # ======== Communication
-        if comm is not None:
-            comm.sendrecv_cov_ema(self.cov_ema_dict)
-            self.t_inv += 1
         self.t_cov += 1
 
     def _cov_ema_update_core(self, linkname):
@@ -403,9 +393,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
-        # ======== Communication
-        if comm is not None:
-            comm.allreduce_cov(covs)
         if linkname in self.cov_ema_dict.keys():
             alpha = self.hyperparam.cov_ema_decay
             cov_emas = self.cov_ema_dict[linkname]

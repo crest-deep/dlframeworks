@@ -12,7 +12,7 @@ class FlatCommunicator(kfac_communicator_base.KFACCommunicatorBase):
 
     def __init__(self, mpi_comm, dynamic=False, debug=False):
         super(FlatCommunicator, self).__init__(
-            mpi_comm, False, dynamic, debug)
+            mpi_comm, dynamic, debug)
 
         # GPU buffers
         self.gpu_buffer_a = DeviceMemory()

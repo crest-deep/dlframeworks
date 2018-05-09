@@ -9,8 +9,8 @@ from dlframeworks.chainer.utils import get_linknames
 
 class KFACCommunicatorBase(mpi_communicator_base.MpiCommunicatorBase):
 
-    def __init__(self, mpi_comm, use_nccl=False, dynamic=False, debug=False):
-        super(KFACCommunicatorBase, self).__init__(mpi_comm, use_nccl)
+    def __init__(self, mpi_comm, dynamic=False, debug=False):
+        super(KFACCommunicatorBase, self).__init__(mpi_comm)
         self.dynamic = dynamic
         self.debug = debug
         self.is_setup = False
@@ -73,7 +73,7 @@ class KFACCommunicatorBase(mpi_communicator_base.MpiCommunicatorBase):
     def allgatherv_get_nelems(self, model):
         nelems = 0
         for _, param in sorted(model.namedparams()):
-            if param.kfgrad is None:
+            if not hasattr(param, 'kfgrad'):
                 continue
             nelems += param.kfgrad.size
         return nelems
@@ -82,6 +82,8 @@ class KFACCommunicatorBase(mpi_communicator_base.MpiCommunicatorBase):
         mpi_print = create_mpi_print(self.mpi_comm)
         idx = 0
         for _, param in sorted(model.namedparams()):
+            if not hasattr(param, 'kfgrad'):
+                continue
             mpi_print('{} ALLGATHERV IDX {} KFGRAD_MEAN {}'.format(
                 prefix, idx, param.kfgrad.mean()))
             idx += 1
