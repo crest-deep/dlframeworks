@@ -1,6 +1,5 @@
 import chainer.cuda
 from chainermn.communicators._memory_utility import DeviceMemory
-from chainermn.communicators.flat_communicator import FlatCommunicator
 import mpi4py.MPI
 
 from dlframeworks.chainer.communicators.kfac_communicators \
@@ -22,8 +21,6 @@ class FlatCommunicator(kfac_communicator_base.KFACCommunicatorBase):
         # Assume 32 bit floating point
         self.mpi_dtype = mpi4py.MPI.FLOAT
         self.sizeof_dtype = 4
-
-    allreduce_grad = FlatCommunicator.allreduce_grad
 
     def reduce_scatterv(self, model, covs, root=0):
         """Reduce and Scatterv grads and covs
