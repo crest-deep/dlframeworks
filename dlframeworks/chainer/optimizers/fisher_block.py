@@ -24,8 +24,6 @@ class FisherBlock():
 
     def compute_covs(self):
         data = self.in_acts, self.out_grads
-        assert self.in_acts is not None
-        assert self.out_grads is not None
         xp = cuda.get_array_module(*data)
         with cuda.get_device_from_array(*data):
             return self.compute_covs_core(xp, *data)
@@ -35,7 +33,8 @@ class FisherBlock():
 
     def update_invs(self, damping):
         cov_emas = self.cov_emas
-        assert len(cov_emas) == 2, 'Length of emas has to be 2.'
+        if cov_emas is None:
+            return
         self.invs = [self.compute_inv_2factors(cov_ema, damping)
                      for cov_ema in cov_emas]
 
@@ -166,3 +165,6 @@ class FisherBlockBatchNorm(FisherBlock):
 
     def __init__(self, link, linkname):
         super(FisherBlockBatchNorm, self).__init__(link, linkname)
+
+    def update_kfgrads(self):
+        pass

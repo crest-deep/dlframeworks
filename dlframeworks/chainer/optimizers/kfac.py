@@ -15,8 +15,8 @@ _default_hyperparam.damping = 0.001
 _target_functions = [
     chainer.functions.connection.linear.LinearFunction,
     chainer.functions.connection.convolution_2d.Convolution2DFunction,
+    chainer.functions.normalization.batch_normalization.BatchNormalization
     ]
-#    chainer.functions.normalization.batch_normalization.BatchNormalization
 
 _linear_link = \
     chainer.links.connection.linear.Linear
@@ -136,9 +136,9 @@ class KFAC(chainer.optimizer.GradientMethod):
             elif isinstance(sub_link, _convolution_2d_link):
                 self.fisher_blocks[linkname] = \
                     fisher_block.FisherBlockConv2D(sub_link, linkname)
-#            elif isinstance(sub_link, _batch_norm_link):
-#                self.fisher_blocks[linkname] = \
-#                    fisher_block.FisherBlockBatchNorm(sub_link, linkname)
+            elif isinstance(sub_link, _batch_norm_link):
+                self.fisher_blocks[linkname] = \
+                    fisher_block.FisherBlockBatchNorm(sub_link, linkname)
             else:
                 continue
         return self
@@ -246,3 +246,5 @@ class KFAC(chainer.optimizer.GradientMethod):
                              for linkname in local_linknames]
         else:
             fisher_blocks = self.fisher_blocks
+        for fb in fisher_blocks.values():
+            fb.update_invs(damping=self.hyperparam.damping)
