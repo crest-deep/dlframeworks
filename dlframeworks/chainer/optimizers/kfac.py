@@ -22,6 +22,10 @@ _convolution_2d_function = \
     chainer.functions.connection.convolution_2d.Convolution2DFunction
 _convolution_2d_link = \
     chainer.links.connection.convolution_2d.Convolution2D
+_batch_norm_link = \
+    chainer.links.normalization.batch_normalization.BatchNormalization
+_batch_norm_function = \
+    chainer.functions.normalization.batch_normalization.BatchNormalization
 
 
 def _cov_linear(xp, acts, grads, nobias):
@@ -59,6 +63,15 @@ def _acts_expand_convolution_2d(acts, ksize, stride, pad):
     # n*ho*wo x c*ksize*ksize
     acts_expand = acts_expand.reshape(n*ho*wo, -1)
     return acts_expand
+
+
+def _cov_batch_norm(acts, grads):
+    assert acts.shape == grads.shape
+    n, c, h, w = acts.shape
+    acts = acts.transpose(0, 2, 3, 1)
+    acts = acts.reshape(n*h*w, -1)
+    grads = grads.transpose(0, 2, 3, 1)
+    grads = grads.reshape(n*h*w, -1)
 
 
 class KFACUpdateRule(chainer.optimizer.UpdateRule):
@@ -132,10 +145,8 @@ class KFAC(chainer.optimizer.GradientMethod):
                          Fisher information matrix.
 
     Attributes:
-        acts_dict (dict): Keep inputs (activations after previous layer)
-                          for each layer.
-        grads_dict (dict): Keep gradients of outputs for each layer.
-        rank_dict (dict): Keep `~chainer.FunctionNode.rank` for each layer.
+        acts_grads_dict (dict): Keep inputs (activations after previous layer)
+                          and gradients of outputs for each layer.
         conv_args_dict (dict): Keep arguments for each convolutional layer
                                (`~chainer.links.connection.\
                                  convolution_2d.Convolution2D`).
@@ -159,9 +170,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
-        self.acts_dict = {}
-        self.grads_dict = {}
-        self.rank_dict = {}
+        self.acts_grads_dict = {}
         self.conv_args_dict = {}
         self.inv_alg = inv_alg
 
@@ -180,13 +189,11 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def setup(self, link):
         super(KFAC, self).setup(link)
-        self.t_inv = 0
-        self.t_cov = 0
         linknames = []
         for linkname, sub_link in link.namedlinks():
-            if isinstance(sub_link, _linear_link):
-                linknames.append(linkname)
-            elif isinstance(sub_link, _convolution_2d_link):
+            if isinstance(sub_link, _linear_link) or\
+                isinstance(sub_link, _convolution_2d_link) or\
+                    isinstance(sub_link, _batch_norm_link):
                 linknames.append(linkname)
             else:
                 continue
@@ -264,14 +271,12 @@ class KFAC(chainer.optimizer.GradientMethod):
         for node, grads in grads.items():
             creator_node = node.creator_node  # parent function node
             if creator_node is not None:  # ignore leaf node
-                if isinstance(creator_node, _linear_function) \
-                  or isinstance(creator_node, _convolution_2d_function):
+                if isinstance(creator_node, _linear_function) or\
+                    isinstance(creator_node, _convolution_2d_function):
                     (acts, param) = creator_node.get_retained_inputs()
                     linkname = get_linkname(param)
                     assert linkname is not None, 'linkname cannot be None.'
-                    self.acts_dict[linkname] = acts.data  # numpy or cupy
-                    self.grads_dict[linkname] = grads.data  # numpy or cupy
-                    self.rank_dict[linkname] = creator_node.rank
+                    self.acts_grads_dict[linkname] = (acts.data, grads.data)  # numpy or cupy
                     if isinstance(creator_node, _convolution_2d_function):
                         conv = creator_node
                         stride, pad = conv.sy, conv.ph
@@ -329,58 +334,13 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return _link
         return None
 
-    def allocate_matrices(self):
-        dictionary = collections.OrderedDict()
-        for linkname in self.linknames:
-            link = self.get_link(linkname)
-            param_W = self.get_param(linkname + '/W')
-            param_b = self.get_param(linkname + '/b')
-            if param_W is None:
-                raise ValueError('param_W MUST not be None at', linkname)
-            xp = cuda.get_array_module(param_W.data)
-
-            with cuda.get_device_from_array(param_W.data):
-                if isinstance(link, _linear_link):
-                    n_out, n_in = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((n_in + 1, n_in + 1))
-                    else:
-                        A = xp.zeros((n_in, n_in))
-                    G = xp.zeros((n_out, n_out))
-                elif isinstance(link, _convolution_2d_link):
-                    c_out, c_in, kh, kw = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((c_in*kh*kw + 1, c_in*kh*kw + 1))
-                    else:
-                        A = xp.zeros((c_in*kh*kw, c_in*kh*kw))
-                    G = xp.zeros((c_out, c_out))
-                else:
-                    continue
-            dictionary[linkname] = [A, G]
-        return collections.OrderedDict(
-            sorted(dictionary.items(), key=lambda x: x[0]))
-
     def cov_ema_update(self):
         """Update EMA of covariance for each laeyer.
 
-        This function refers `self.rank_dict` to get sorted keys (linknames).
+        This function refers `self.acts_grads_dict`.
         """
-        comm = self.communicator
-        if self.t_cov == 0:
-            self.cov_ema_dict = self.allocate_matrices()
-        # ======== Communication
-        if comm is not None:
-            is_done = comm.sendrecv_param(self)
-            if is_done:
-                return True
-        for i, linkname in enumerate(sorted(self.rank_dict.keys())):
+        for linkname in self.acts_grads_dict.keys():
             self._cov_ema_update_core(linkname)
-
-        # ======== Communication
-        if comm is not None:
-            comm.sendrecv_cov_ema(self.cov_ema_dict)
-            self.t_inv += 1
-        self.t_cov += 1
 
     def _cov_ema_update_core(self, linkname):
         """Update the value of `self.cov_ema_dict[linkname]`.
@@ -388,9 +348,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         Args:
             linkname (str): Key of `self.cov_ema_dict`.
         """
-        comm = self.communicator
-        acts = self.acts_dict[linkname]
-        grads = self.grads_dict[linkname]
+        acts, grads = self.acts_grads_dict[linkname]
         nobias = self.get_param(linkname + '/b') is None
         xp = cuda.get_array_module(acts, grads)
         with cuda.get_device_from_array(acts, grads):
@@ -403,14 +361,11 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
-        # ======== Communication
-        if comm is not None:
-            comm.allreduce_cov(covs)
         if linkname in self.cov_ema_dict.keys():
             alpha = self.hyperparam.cov_ema_decay
             cov_emas = self.cov_ema_dict[linkname]
             for i, cov_ema in enumerate(cov_emas):
-                cov_emas[i] = alpha * covs[i] + (1 - alpha) * cov_ema
+                cov_emas[i] = alpha * covs[i] + (1 - alpha) * cov_emas[i]
             self.cov_ema_dict[linkname] = cov_emas
         else:
             self.cov_ema_dict[linkname] = covs
@@ -426,8 +381,6 @@ class KFAC(chainer.optimizer.GradientMethod):
         for linkname in divided_linknames[comm.rank]:
             emas = self.cov_ema_dict[linkname]
             self._inv_update_core(linkname, emas)
-
-        self.t_inv += 1
 
     def _inv_update_core(self, linkname, emas):
         """Update the value of `self.inv_dict[linkname]`.
