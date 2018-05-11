@@ -1,6 +1,6 @@
 import datetime
 import json
-import socket
+from socket import gethostname
 import shutil
 import yaml
 
@@ -26,7 +26,7 @@ def get_time(fmt='%y.%m.%d_%H.%M.%S'):
 
 
 def get_npernode(ops):
-    hostname = socket.gethostname().strip()
+    hostname = gethostname()[:3]
     if hostname == 'kfc':
         return 8
     else:

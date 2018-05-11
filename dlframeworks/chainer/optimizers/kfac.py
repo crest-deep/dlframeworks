@@ -1,10 +1,11 @@
 import collections
-import numpy
 
 import chainer
 from chainer import optimizer
 from chainer.backends import cuda
 from chainer.functions import im2col
+
+from dlframeworks.chainer.utils import get_divided_linknames
 
 _default_hyperparam = chainer.optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.001
@@ -196,32 +197,15 @@ class KFAC(chainer.optimizer.GradientMethod):
 
     def update(self, lossfun=None, *args, **kwds):
         comm = self.communicator
-        if comm is None:
-            self.grad_update(lossfun, *args, **kwds)
-            self.cov_ema_update()
-            if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
-                self.inv_update()
-        else:
-            if comm.is_grad_worker:
-                if comm.gcomm.rank == 0:
-                    print('grad_update()')
-                self.grad_update(lossfun, *args, **kwds)
-            if comm.is_cov_worker:
-                if comm.ccomm.rank == 0:
-                    print('cov_ema_update()')
-                self.is_done = self.cov_ema_update()
-            if comm.is_inv_worker:
-                if comm.icomm_g.rank == 0:
-                    print('inv_update()')
-                self.is_done = self.inv_update()
+        self.grad_update(lossfun, *args, **kwds)
+        self.cov_ema_update()
+        if comm is not None:
+            comm.reduce_scatterv(self.target, self.cov_ema_dict)
+        self.inv_update()
+        if comm is not None:
+            comm.allgatherv(self.target)
 
     def grad_update(self, lossfun=None, *args, **kwds):
-        comm = self.communicator
-        # ======== Communication
-        if comm is not None:
-            if self.t % self.hyperparam.inv_freq == 1:
-                comm.sendrecv_param(self)
-                self.t_cov += 1
         if lossfun is not None:
             use_cleargrads = getattr(self, '_use_cleargrads', True)
             loss = lossfun(*args, **kwds)
@@ -237,17 +221,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             self._kfac_backward(self.target, backward_main)
 
             del loss  # No more backward computation, free memory
-
-            # ======== Communication
-            if comm is not None:
-                synced = comm.allreduce_grad(self)
-                if not synced:
-                    return
-                if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
-                    if self.t_inv == 0 and not comm.is_inv_worker:
-                        self.inv_dict = self.allocate_matrices()
-                    comm.bcast_inv(self.inv_dict)
-                    self.t_inv += 1
 
             # Update param.kfgrad for each layer
             self.kfac_grad_update()
@@ -355,57 +328,14 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return _link
         return None
 
-    def allocate_matrices(self):
-        dictionary = collections.OrderedDict()
-        for linkname in self.linknames:
-            link = self.get_link(linkname)
-            param_W = self.get_param(linkname + '/W')
-            param_b = self.get_param(linkname + '/b')
-            if param_W is None:
-                raise ValueError('param_W MUST not be None at', linkname)
-            xp = cuda.get_array_module(param_W.data)
-
-            with cuda.get_device_from_array(param_W.data):
-                if isinstance(link, _linear_link):
-                    n_out, n_in = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((n_in + 1, n_in + 1))
-                    else:
-                        A = xp.zeros((n_in, n_in))
-                    G = xp.zeros((n_out, n_out))
-                elif isinstance(link, _convolution_2d_link):
-                    c_out, c_in, kh, kw = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((c_in*kh*kw + 1, c_in*kh*kw + 1))
-                    else:
-                        A = xp.zeros((c_in*kh*kw, c_in*kh*kw))
-                    G = xp.zeros((c_out, c_out))
-                else:
-                    continue
-            dictionary[linkname] = [A, G]
-        return collections.OrderedDict(
-            sorted(dictionary.items(), key=lambda x: x[0]))
-
     def cov_ema_update(self):
         """Update EMA of covariance for each laeyer.
 
         This function refers `self.rank_dict` to get sorted keys (linknames).
         """
-        comm = self.communicator
-        if self.t_cov == 0:
-            self.cov_ema_dict = self.allocate_matrices()
-        # ======== Communication
-        if comm is not None:
-            is_done = comm.sendrecv_param(self)
-            if is_done:
-                return True
         for i, linkname in enumerate(sorted(self.rank_dict.keys())):
             self._cov_ema_update_core(linkname)
 
-        # ======== Communication
-        if comm is not None:
-            comm.sendrecv_cov_ema(self.cov_ema_dict)
-            self.t_inv += 1
         self.t_cov += 1
 
     def _cov_ema_update_core(self, linkname):
@@ -429,9 +359,6 @@ class KFAC(chainer.optimizer.GradientMethod):
             else:
                 raise ValueError('Invalid or unsupported shape: {}.'.format(
                     acts.shape))
-        # ======== Communication
-        if comm is not None:
-            comm.allreduce_cov(covs)
         if linkname in self.cov_ema_dict.keys():
             alpha = self.hyperparam.cov_ema_decay
             cov_emas = self.cov_ema_dict[linkname]
@@ -447,32 +374,13 @@ class KFAC(chainer.optimizer.GradientMethod):
         This function refers `self.cov_ema_dict`.
         """
         comm = self.communicator
-        # ======== Communication
-        if comm is not None:
-            if self.t_inv == 0 and not comm.is_cov_worker:
-                self.cov_ema_dict = self.allocate_matrices()
-            comm.sendrecv_cov_ema(self.cov_ema_dict)
 
-        if comm is not None and len(comm.inv_worker_ranks) > 1:
-            index = comm.inv_worker_ranks.index(comm.wcomm.rank)
-            keys = numpy.array(sorted(list(self.cov_ema_dict.keys())))
-            keys = numpy.array_split(keys, len(comm.inv_worker_ranks))
-            my_keys = list(keys[index])
-            self.inv_dict = self.allocate_matrices()
-        else:
-            my_keys = list(self.cov_ema_dict.keys())
-
-        for key in my_keys:
-            linkname = key
-            emas = self.cov_ema_dict[key]
+        divided_linknames = get_divided_linknames(self.target, comm.size)
+        for linkname in divided_linknames[comm.rank]:
+            emas = self.cov_ema_dict[linkname]
             self._inv_update_core(linkname, emas)
 
         self.t_inv += 1
-        # ======== Communication
-        if comm is not None:
-            is_done = comm.bcast_inv(self.inv_dict)
-            if is_done:
-                return True
 
     def _inv_update_core(self, linkname, emas):
         """Update the value of `self.inv_dict[linkname]`.

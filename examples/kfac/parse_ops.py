@@ -14,7 +14,7 @@ from parse_ops_core import copy_files
 
 
 def parse_ops(ops):
-    hostname = gethostname().strip()
+    hostname = gethostname()[:3]
     if hostname == 'kfc':
         script = """\
 #!/bin/sh
