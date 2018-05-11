@@ -1,89 +1,38 @@
 from chainermn.communicators import mpi_communicator_base
 import numpy as np
 
-from dlframeworks.chainer.utils import create_mpi_print
-from dlframeworks.chainer.utils import get_divided_linknames
-from dlframeworks.chainer.utils import get_link
-from dlframeworks.chainer.utils import get_linknames
-
 
 class KFACCommunicatorBase(mpi_communicator_base.MpiCommunicatorBase):
 
-    def __init__(self, mpi_comm, dynamic=False, debug=False):
+    def __init__(self, mpi_comm, debug=False):
         super(KFACCommunicatorBase, self).__init__(mpi_comm)
-        self.dynamic = dynamic
         self.debug = debug
         self.is_setup = False
+
+    def setup(self, fisher_blocks):
+        if self.is_setup:
+            return
+
+        n = len(fisher_blocks)
+        is_inv_worker = True if self.rank < n else False
+        if self.size > n:
+            inv_comm = self.split(int(is_inv_worker), self.rank)
+        else:
+            inv_comm = self
+
+        indices = np.array_split(np.arange(n), self.size)
+        indices = [local_indices.tolist() for local_indices in indices]
+
+        self.is_inv_worker = is_inv_worker
+        self.inv_comm = inv_comm
+        self.indices = indices
+        self.is_setup = True
 
     def allreduce_grad(self, *args, **kwargs):
         pass
 
-    def setup(self, model):
-        if self.is_setup and not self.dynamic:
-            return
-        rank = self.rank
-        size = self.size
-        linknames = sorted(get_linknames(model))
-        is_worker = True if rank < len(linknames) else False
-        invcomm = self
-        if size > len(linknames):
-            invcomm = self.split(int(is_worker), rank)
-        self.linknames = linknames
-        self.is_worker = is_worker
-        self.invcomm = invcomm
-        self.divided_linknames = get_divided_linknames(model, size)
-        self.is_setup = True
-
-    def reduce_scatterv(self, model, covs, root=0):
+    def reduce_scatterv_grad(self, fisher_blocks, root=0):
         raise NotImplementedError
 
-    def reduce_scatterv_extract(self, model, covs):
-        linknames = sorted(get_linknames(model))
-        ret = {}
-        for linkname in linknames:
-            ret[linkname] = []
-            if linkname in covs.keys():
-                for cov in covs[linkname]:
-                    ret[linkname].append(cov)
-            link = get_link(model, linkname)
-            for _, param in sorted(link.namedparams()):
-                if param.grad is not None:
-                    ret[linkname].append(param.grad)
-        return ret
-
-    def reduce_scatterv_get_nelems(self, dictionary):
-        nelems = 0
-        for _, arrays in sorted(dictionary.items()):
-            for array in arrays:
-                nelems += array.size
-        return nelems
-
-    def reduce_scatterv_debug(self, dictionary, prefix):
-        mpi_print = create_mpi_print(self.mpi_comm)
-        idx = 0
-        for linkname, arrays in sorted(dictionary.items()):
-            for array in arrays:
-                mpi_print('{} REDUCE_SCATTERV IDX {} MEAN {}'
-                          .format(prefix, idx, array.mean()))
-                idx += 1
-
-    def allgatherv(self, model):
+    def allgatherv_kfgrad(self, fisher_blocks):
         raise NotImplementedError
-
-    def allgatherv_get_nelems(self, model):
-        nelems = 0
-        for _, param in sorted(model.namedparams()):
-            if not hasattr(param, 'kfgrad'):
-                continue
-            nelems += param.kfgrad.size
-        return nelems
-
-    def allgatherv_debug(self, model, prefix):
-        mpi_print = create_mpi_print(self.mpi_comm)
-        idx = 0
-        for _, param in sorted(model.namedparams()):
-            if not hasattr(param, 'kfgrad'):
-                continue
-            mpi_print('{} ALLGATHERV IDX {} KFGRAD_MEAN {}'.format(
-                prefix, idx, param.kfgrad.mean()))
-            idx += 1

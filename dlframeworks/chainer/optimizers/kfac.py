@@ -328,45 +328,11 @@ class KFAC(chainer.optimizer.GradientMethod):
                 return _link
         return None
 
-    def allocate_matrices(self):
-        dictionary = collections.OrderedDict()
-        for linkname in self.linknames:
-            link = self.get_link(linkname)
-            param_W = self.get_param(linkname + '/W')
-            param_b = self.get_param(linkname + '/b')
-            if param_W is None:
-                raise ValueError('param_W MUST not be None at', linkname)
-            xp = cuda.get_array_module(param_W.data)
-
-            with cuda.get_device_from_array(param_W.data):
-                if isinstance(link, _linear_link):
-                    n_out, n_in = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((n_in + 1, n_in + 1))
-                    else:
-                        A = xp.zeros((n_in, n_in))
-                    G = xp.zeros((n_out, n_out))
-                elif isinstance(link, _convolution_2d_link):
-                    c_out, c_in, kh, kw = param_W.shape
-                    if param_b is not None:
-                        A = xp.zeros((c_in*kh*kw + 1, c_in*kh*kw + 1))
-                    else:
-                        A = xp.zeros((c_in*kh*kw, c_in*kh*kw))
-                    G = xp.zeros((c_out, c_out))
-                else:
-                    continue
-            dictionary[linkname] = [A, G]
-        return collections.OrderedDict(
-            sorted(dictionary.items(), key=lambda x: x[0]))
-
     def cov_ema_update(self):
         """Update EMA of covariance for each laeyer.
 
         This function refers `self.rank_dict` to get sorted keys (linknames).
         """
-        comm = self.communicator
-        if self.t_cov == 0:
-            self.cov_ema_dict = self.allocate_matrices()
         for i, linkname in enumerate(sorted(self.rank_dict.keys())):
             self._cov_ema_update_core(linkname)
 
