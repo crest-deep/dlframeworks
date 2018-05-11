@@ -97,13 +97,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                          Fisher information matrix.
 
     Attributes:
-        fisher_blocks (dict): Keep data to compute Fisher block.
+        fisher_blocks (list): Keep data to compute Fisher block.
 
     """
 
     def __init__(self,
                  communicator=None,
-                 inv_server=None,
                  lr=_default_hyperparam.lr,
                  momentum=_default_hyperparam.momentum,
                  cov_ema_decay=_default_hyperparam.cov_ema_decay,
@@ -118,7 +117,7 @@ class KFAC(chainer.optimizer.GradientMethod):
         self.hyperparam.inv_freq = inv_freq
         self.hyperparam.damping = damping
 
-        self.fisher_blocks = {}
+        self.fisher_blocks = []
         self.inv_alg = inv_alg
 
     lr = optimizer.HyperparameterProxy('lr')
@@ -131,16 +130,14 @@ class KFAC(chainer.optimizer.GradientMethod):
         super(KFAC, self).setup(link)
         for linkname, sub_link in link.namedlinks():
             if isinstance(sub_link, _linear_link):
-                self.fisher_blocks[linkname] = \
-                    fisher_block.FisherBlockLinear(sub_link, linkname)
+                fb = fisher_block.FisherBlockLinear(sub_link, linkname)
             elif isinstance(sub_link, _convolution_2d_link):
-                self.fisher_blocks[linkname] = \
-                    fisher_block.FisherBlockConv2D(sub_link, linkname)
+                fb = fisher_block.FisherBlockConv2D(sub_link, linkname)
             elif isinstance(sub_link, _batch_norm_link):
-                self.fisher_blocks[linkname] = \
-                    fisher_block.FisherBlockBatchNorm(sub_link, linkname)
+                fb = fisher_block.FisherBlockBatchNorm(sub_link, linkname)
             else:
                 continue
+            self.fisher_blocks.append(fb)
         return self
 
     def create_update_rule(self):
@@ -178,14 +175,6 @@ class KFAC(chainer.optimizer.GradientMethod):
 
         self.cov_ema_update()
 
-        comm = self.communicator
-        if comm is not None:
-            comm.reduce_scatterv(self.target, self.cov_ema_dict)
-        if self.t % self.hyperparam.inv_freq == 0 and self.t > 0:
-            self.inv_update()
-        if comm is not None:
-            comm.allgatherv(self.target)
-
     def kfac_backward(self, link, backward_main):
         """Backward function for KFAC optimizer.
         This function is invoked from ``KFAC.update()`` to:
@@ -211,6 +200,12 @@ class KFAC(chainer.optimizer.GradientMethod):
                     return _name[:_name.rfind('/')]
             return None
 
+        def get_fisher_block(linkname):
+            for fb in self.fisher_blocks:
+                if fb.linkname == linkname:
+                    return fb
+            return None
+
         for node, out_grads_var in grads.items():
             creator_node = node.creator_node  # parent function node
             if creator_node is not None:  # ignore leaf node
@@ -219,20 +214,20 @@ class KFAC(chainer.optimizer.GradientMethod):
                     continue
                 (in_acts_var, param) = creator_node.get_retained_inputs()
                 linkname = get_linkname(param)
-                fb = self.fisher_blocks[linkname]
+                fb = get_fisher_block(linkname)
                 fb.load_data(in_acts_var.data, out_grads_var.data)
                 fb.load_conv2d_args(creator_node, param)
 
     def kfgrad_update(self):
         """Update param.kfgrad which used for K-FAC updates for each laeyer.
         """
-        for fb in self.fisher_blocks.values():
+        for fb in self.fisher_blocks:
             fb.update_kfgrads()
 
     def cov_ema_update(self):
         """Update EMA of covariance for each laeyer.
         """
-        for fb in self.fisher_blocks.values():
+        for fb in self.fisher_blocks:
             fb.update_cov_emas(alpha=self.hyperparam.cov_ema_decay)
 
     def inv_update(self):
@@ -240,11 +235,13 @@ class KFAC(chainer.optimizer.GradientMethod):
         """
         comm = self.communicator
         if comm is not None:
-            divided_linknames = get_divided_linknames(self.target, comm.size)
-            local_linknames = divided_linknames[comm.rank]
-            fisher_blocks = [self.fisher_blocks[linkname]
-                             for linkname in local_linknames]
+            indices
+            local_indices = indices[comm.rank]
+            fisher_blocks = [self.fisher_blocks[i]
+                             for i in local_indices]
         else:
             fisher_blocks = self.fisher_blocks
-        for fb in fisher_blocks.values():
+        for fb in fisher_blocks:
             fb.update_invs(damping=self.hyperparam.damping)
+
+

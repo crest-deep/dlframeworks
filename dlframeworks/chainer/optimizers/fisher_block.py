@@ -2,7 +2,7 @@ from chainer.backends import cuda
 from chainer.functions import im2col
 
 
-class FisherBlock():
+class FisherBlock(object):
 
     def __init__(self, link, linkname, inv_alg=None):
         self.link = link
@@ -74,7 +74,7 @@ class FisherBlock():
         with cuda.get_device_from_array(*data):
             return self.compute_kfgrads_core(xp, param_W, param_b, invs)
 
-    def compute_kfgrads_core(self):
+    def compute_kfgrads_core(self, xp, param_W, param_b, invs):
         pass
 
     def nobias(self):
