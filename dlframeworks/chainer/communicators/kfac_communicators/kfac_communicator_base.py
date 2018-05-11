@@ -2,6 +2,7 @@ from chainermn.communicators import mpi_communicator_base
 import numpy as np
 
 from dlframeworks.chainer.utils import create_mpi_print
+from dlframeworks.chainer.utils import get_divided_linknames
 from dlframeworks.chainer.utils import get_link
 from dlframeworks.chainer.utils import get_linknames
 
@@ -22,18 +23,15 @@ class KFACCommunicatorBase(mpi_communicator_base.MpiCommunicatorBase):
             return
         rank = self.rank
         size = self.size
-
         linknames = sorted(get_linknames(model))
         is_worker = True if rank < len(linknames) else False
         invcomm = self
         if size > len(linknames):
             invcomm = self.split(int(is_worker), rank)
-        divided_linknames = np.array_split(linknames, self.size)
-
         self.linknames = linknames
         self.is_worker = is_worker
         self.invcomm = invcomm
-        self.divided_linknames = divided_linknames
+        self.divided_linknames = get_divided_linknames(model, size)
         self.is_setup = True
 
     def reduce_scatterv(self, model, covs, root=0):
