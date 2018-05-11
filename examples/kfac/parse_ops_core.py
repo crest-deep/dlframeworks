@@ -1,6 +1,6 @@
 import datetime
 import json
-import socket
+from socket import gethostname
 import shutil
 import yaml
 
